@@ -1,0 +1,24 @@
+version: v1
+
+# Managed mode - buf handles Go package paths automatically
+managed:
+  enabled: true
+  go_package_prefix:
+    default: yao-oracle/pb
+    except:
+      - buf.build/googleapis/googleapis
+
+# Plugins for code generation
+plugins:
+  # Go Protocol Buffers plugin
+  - plugin: go
+    out: ../pb
+    opt:
+      - paths=source_relative
+      
+  # Go gRPC plugin
+  - plugin: go-grpc
+    out: ../pb
+    opt:
+      - paths=source_relative
+

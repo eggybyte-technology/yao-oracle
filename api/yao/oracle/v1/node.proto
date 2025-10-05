@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package yao.oracle.v1;
+
+option go_package = "yao-oracle/pb/yao/oracle/v1;oraclev1";
+
+// NodeService defines the Cache Node storage API.
+// This service is namespace-agnostic; namespace logic is handled by Proxy.
+service NodeService {
+  // Get retrieves a value by key from the cache.
+  rpc Get(GetRequest) returns (GetResponse);
+  
+  // Set stores a key-value pair with optional TTL.
+  rpc Set(SetRequest) returns (SetResponse);
+  
+  // Delete removes a key from the cache.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  
+  // Health checks if the node is healthy and ready to serve.
+  rpc Health(HealthRequest) returns (HealthResponse);
+  
+  // Stats returns node statistics (memory, key count, etc.).
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+// GetRequest contains the key to retrieve.
+message GetRequest {
+  // key is the cache key to retrieve
+  string key = 1;
+}
+
+// GetResponse contains the retrieved value or error.
+message GetResponse {
+  // found indicates whether the key exists
+  bool found = 1;
+  
+  // value is the cached data (only set if found=true)
+  bytes value = 2;
+  
+  // ttl is the remaining time-to-live in seconds
+  int32 ttl = 3;
+}
+
+// SetRequest contains the key-value pair to store.
+message SetRequest {
+  // key is the cache key
+  string key = 1;
+  
+  // value is the data to cache
+  bytes value = 2;
+  
+  // ttl is the time-to-live in seconds (0 = no expiration)
+  int32 ttl = 3;
+}
+
+// SetResponse indicates success or failure of the set operation.
+message SetResponse {
+  // success indicates if the operation succeeded
+  bool success = 1;
+  
+  // message provides error details if success=false
+  string message = 2;
+}
+
+// DeleteRequest contains the key to delete.
+message DeleteRequest {
+  // key is the cache key to delete
+  string key = 1;
+}
+
+// DeleteResponse indicates success of the delete operation.
+message DeleteResponse {
+  // success indicates if the operation succeeded
+  bool success = 1;
+  
+  // existed indicates if the key existed before deletion
+  bool existed = 2;
+}
+
+// HealthRequest is empty (health check has no parameters).
+message HealthRequest {}
+
+// HealthResponse indicates node health status.
+message HealthResponse {
+  // healthy indicates if the node is ready to serve
+  bool healthy = 1;
+  
+  // message provides additional health information
+  string message = 2;
+}
+
+// StatsRequest can optionally filter which stats to return.
+message StatsRequest {}
+
+// StatsResponse contains node statistics.
+message StatsResponse {
+  // total_keys is the number of keys stored
+  int64 total_keys = 1;
+  
+  // memory_used_bytes is the approximate memory usage
+  int64 memory_used_bytes = 2;
+  
+  // uptime_seconds is how long the node has been running
+  int64 uptime_seconds = 3;
+  
+  // requests_total is the total number of requests served
+  int64 requests_total = 4;
+  
+  // hits is the number of cache hits
+  int64 hits = 5;
+  
+  // misses is the number of cache misses
+  int64 misses = 6;
+}
+

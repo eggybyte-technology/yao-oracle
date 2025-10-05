@@ -1,0 +1,439 @@
+---
+globs: api/**/*.proto,buf.yaml,buf.gen.yaml
+description: Protocol Buffers and Buf code generation standards
+---
+
+# Protocol Buffers and Buf Standards
+
+## Directory Structure
+
+```
+yao-oracle/
+├── api/                        # Protocol Buffers API definitions
+│   ├── buf.yaml                # Buf workspace configuration
+│   ├── buf.gen.yaml            # Buf code generation configuration
+│   ├── buf.lock                # Buf dependency lock file
+│   │
+│   └── yao-oracle/             # Package structure follows module path
+│       └── v1/                 # API version v1
+│           ├── proxy.proto     # Proxy service API
+│           ├── node.proto      # Cache Node service API
+│           ├── dashboard.proto # Dashboard service API
+│           └── common.proto    # Shared types and messages
+│
+├── pb/                         # Generated Go code (gitignored)
+│   └── yao-oracle/v1/
+│       ├── *.pb.go
+│       └── *_grpc.pb.go
+```
+
+## Buf Configuration
+
+### buf.yaml (Workspace Configuration)
+
+**Required Sections:**
+
+**Version:**
+```yaml
+version: v1
+```
+
+**Breaking Change Detection:**
+```yaml
+breaking:
+  use:
+    - FILE
+```
+
+**Linting Configuration:**
+```yaml
+lint:
+  use:
+    - DEFAULT
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_same_request_response: false
+  rpc_allow_google_protobuf_empty_requests: true
+  rpc_allow_google_protobuf_empty_responses: true
+```
+
+**Module Name (Optional):**
+```yaml
+name: buf.build/yao-oracle/api
+```
+
+### buf.gen.yaml (Code Generation Configuration)
+
+**Required Sections:**
+
+**Managed Mode (Automatic Package Paths):**
+```yaml
+managed:
+  enabled: true
+  go_package_prefix:
+    default: yao-oracle/pb
+    except:
+      - buf.build/googleapis/googleapis
+```
+
+**Plugins:**
+```yaml
+plugins:
+  # Go Protocol Buffers plugin
+  - plugin: go
+    out: ../pb
+    opt:
+      - paths=source_relative
+      
+  # Go gRPC plugin
+  - plugin: go-grpc
+    out: ../pb
+    opt:
+      - paths=source_relative
+```
+
+**Optional Plugins:**
+- `grpc-gateway`: For REST API support
+- `openapiv2`: For OpenAPI/Swagger documentation
+
+## Proto File Standards
+
+### Package Naming Convention
+
+**Pattern:** `yao.oracle.v{version}`
+
+```proto
+syntax = "proto3";
+package yao.oracle.v1;
+option go_package = "yao-oracle/pb/yao-oracle/v1;oraclev1";
+```
+
+### Common Types (common.proto)
+
+**Define Shared Types Used Across Services:**
+
+**Required Common Messages:**
+- `KeyValue` - Cache entry with metadata
+- `Status` - Operation result status
+- `Empty` - Empty message
+
+**Example Structure:**
+```proto
+message KeyValue {
+  string key = 1;           // Cache key
+  bytes value = 2;          // Binary-safe value
+  int32 ttl = 3;            // Time-to-live in seconds
+  string namespace = 4;     // Business namespace
+  int64 created_at = 5;     // Unix timestamp
+  int64 expires_at = 6;     // Unix timestamp (0 = no expiration)
+}
+```
+
+### Service Definition Patterns
+
+**Cache Node Service (node.proto)**
+
+**Service Interface Requirements:**
+```proto
+service NodeService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+```
+
+**Message Requirements:**
+- All requests/responses as separate message types
+- No reusing request/response types across RPCs
+- Include status/error fields in responses
+- Use `bool found` or `bool success` for operation results
+
+**Proxy Service (proxy.proto)**
+
+**Service Interface Requirements:**
+```proto
+service ProxyService {
+  rpc Get(ProxyGetRequest) returns (ProxyGetResponse);
+  rpc Set(ProxySetRequest) returns (ProxySetResponse);
+  rpc Delete(ProxyDeleteRequest) returns (ProxyDeleteResponse);
+  rpc BatchGet(ProxyBatchGetRequest) returns (ProxyBatchGetResponse);
+  rpc Health(ProxyHealthRequest) returns (ProxyHealthResponse);
+}
+```
+
+**Key Fields:**
+- `api_key` in all request messages (for authentication)
+- `found` or `success` in response messages
+- `node` field in responses (which cache node handled request)
+
+## Buf Commands
+
+### Initialize Buf in Project
+
+```bash
+cd api
+buf mod init
+```
+
+### Generate Code
+
+```bash
+# From project root
+buf generate api
+
+# Or from api directory
+cd api && buf generate
+```
+
+### Linting
+
+```bash
+# Lint all proto files
+buf lint api
+
+# Fix formatting
+buf format -w api
+```
+
+### Breaking Change Detection
+
+```bash
+# Compare against main branch
+buf breaking api --against '.git#branch=main'
+
+# Compare against a tag
+buf breaking api --against '.git#tag=v1.0.0'
+```
+
+## Integration with Makefile
+
+**Required Targets:**
+
+```makefile
+.PHONY: proto-generate
+proto-generate: ## Generate Go code from proto files
+	@buf generate api
+
+.PHONY: proto-lint
+proto-lint: ## Lint proto files
+	@buf lint api
+
+.PHONY: proto-breaking
+proto-breaking: ## Check for breaking changes
+	@buf breaking api --against '.git#branch=main'
+```
+
+## Documentation Requirements
+
+**Every proto message and service MUST be documented:**
+
+```proto
+// UserProfile represents a user's profile information stored in cache.
+// This is typically used by the game-app namespace for session data.
+message UserProfile {
+  // user_id is the unique identifier for the user
+  string user_id = 1;
+  
+  // display_name is shown in the game UI
+  string display_name = 2;
+  
+  // level is the player's current level (1-100)
+  int32 level = 3;
+}
+```
+
+**Documentation Guidelines:**
+- One-line summary for message/service
+- Explain purpose and typical use case
+- Document each field: purpose, constraints, units
+- Document RPC methods: what they do, when to use them
+
+## Versioning Strategy
+
+**API Versioning Rules:**
+- Use `/v1`, `/v2` etc. in package paths
+- Breaking changes require a new version
+- Maintain backward compatibility within a version
+- Deprecate old fields instead of removing them
+
+**Deprecation Pattern:**
+```proto
+message Example {
+  // old_field is deprecated. Use new_field instead.
+  string old_field = 1 [deprecated = true];
+  
+  // new_field replaces old_field with better semantics
+  string new_field = 2;
+}
+```
+
+## Best Practices
+
+### Field Numbering
+
+**Rules:**
+- Reserve 1-15 for frequently used fields (1 byte encoding)
+- Never reuse field numbers
+- Use `reserved` for deleted fields
+
+**Example:**
+```proto
+message Example {
+  reserved 2, 15, 9 to 11;
+  reserved "foo", "bar";
+  
+  string name = 1;
+  int32 age = 3;
+}
+```
+
+### Enums
+
+**Always include `UNSPECIFIED` as value 0:**
+
+```proto
+enum CacheStatus {
+  CACHE_STATUS_UNSPECIFIED = 0;
+  CACHE_STATUS_HIT = 1;
+  CACHE_STATUS_MISS = 2;
+  CACHE_STATUS_ERROR = 3;
+}
+```
+
+**Enum Naming:**
+- Prefix with message/scope name
+- Use `_UNSPECIFIED` suffix for zero value
+- Use uppercase with underscores
+
+### Timestamps
+
+**Guidelines:**
+- Use `google.protobuf.Timestamp` for wall-clock times
+- Use `int64` for Unix timestamps when interoperating with non-proto systems
+- Always document timezone (usually UTC)
+
+### Binary Data
+
+**Guidelines:**
+- Use `bytes` for binary data (cache values, encrypted data, etc.)
+- Use `string` only for text data that must be valid UTF-8
+- Document encoding if applicable (base64, hex, etc.)
+
+### Message Design
+
+**Best Practices:**
+- Keep messages focused and single-purpose
+- Avoid deeply nested structures (prefer flat)
+- Use `oneof` for mutually exclusive fields
+- Use `repeated` for lists/arrays
+- Use `map` for key-value pairs
+
+**Example:**
+```proto
+message CacheEntry {
+  string key = 1;
+  bytes value = 2;
+  
+  oneof expiration {
+    int32 ttl_seconds = 3;
+    int64 expire_at_unix = 4;
+  }
+}
+```
+
+## .gitignore Configuration
+
+```gitignore
+# Generated code
+/pb/
+
+# Buf dependencies
+/api/buf.lock
+```
+
+## Dependencies Installation
+
+```bash
+# Install buf
+go install github.com/bufbuild/buf/cmd/buf@latest
+
+# Install protoc plugins
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+```
+
+## Common Patterns for Yao-Oracle
+
+### Request/Response Pattern
+
+**Request:**
+```proto
+message GetRequest {
+  string key = 1;  // Required field
+}
+```
+
+**Response:**
+```proto
+message GetResponse {
+  bool found = 1;         // Indicates if key exists
+  bytes value = 2;        // Only set if found=true
+  int32 remaining_ttl = 3; // Remaining time-to-live
+}
+```
+
+### Error Handling Pattern
+
+**Include status in response:**
+```proto
+message SetResponse {
+  bool success = 1;
+  string message = 2;  // Error message if success=false
+}
+```
+
+**Or use separate error field:**
+```proto
+message Response {
+  oneof result {
+    Data data = 1;
+    Error error = 2;
+  }
+}
+
+message Error {
+  int32 code = 1;
+  string message = 2;
+}
+```
+
+### Batch Operations Pattern
+
+```proto
+message BatchGetRequest {
+  repeated string keys = 1;
+}
+
+message BatchGetResponse {
+  map<string, bytes> results = 1;  // Only includes found keys
+  repeated string not_found = 2;    // Keys that don't exist
+}
+```
+
+## Validation Rules
+
+**Buf Lint Will Enforce:**
+- ✅ All RPCs have request and response types
+- ✅ All enums have `_UNSPECIFIED` as value 0
+- ✅ All files have package declaration
+- ✅ All messages and fields are documented
+- ✅ Field names use snake_case
+- ✅ Message names use PascalCase
+- ✅ Service names end with "Service"
+
+**Manual Validation Required:**
+- Check field numbers are not reused
+- Check reserved fields are documented
+- Check deprecated fields have migration notes
+- Check all timestamps use consistent units (seconds vs milliseconds)

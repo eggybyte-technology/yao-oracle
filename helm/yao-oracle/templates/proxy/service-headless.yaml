@@ -1,0 +1,36 @@
+{{- if .Values.proxy.enabled }}
+{{- /*
+Headless Service for Proxy discovery.
+Used by Dashboard to discover all Proxy Pod IPs via Kubernetes Endpoints API.
+ClusterIP: None ensures DNS returns Pod IPs directly, not a cluster IP.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-proxy-headless
+  labels:
+    {{- include "yao-oracle.proxy.labels" . | nindent 4 }}
+  annotations:
+    description: "Headless service for Proxy discovery (used by Dashboard)"
+spec:
+  clusterIP: None  # Headless service - returns Pod IPs
+  publishNotReadyAddresses: false
+  selector:
+    {{- include "yao-oracle.proxy.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: grpc
+    port: {{ .Values.proxy.service.grpcPort }}
+    targetPort: grpc
+    protocol: TCP
+  - name: health
+    port: {{ .Values.proxy.service.healthPort | default 9090 }}
+    targetPort: health
+    protocol: TCP
+  {{- if .Values.proxy.metrics.enabled }}
+  - name: metrics
+    port: {{ .Values.proxy.service.metricsPort | default 9100 }}
+    targetPort: metrics
+    protocol: TCP
+  {{- end }}
+{{- end }}
+

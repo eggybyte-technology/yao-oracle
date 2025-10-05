@@ -1,0 +1,17 @@
+{{- if and .Values.node.enabled .Values.node.metrics.enabled .Values.node.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-node
+  labels:
+    {{- include "yao-oracle.node.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.node.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.node.metrics.serviceMonitor.interval }}
+    path: /metrics
+{{- end }}
+

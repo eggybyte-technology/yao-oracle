@@ -1,0 +1,201 @@
+# Production environment overrides for yao-oracle
+# Use with: helm install yao-oracle ./helm/yao-oracle -f ./helm/yao-oracle/values-prod.yaml
+
+# Global settings for production
+global:
+  imageRegistry: docker.io
+  imagePullSecrets:
+    - name: regcred
+
+# Proxy configuration for production
+proxy:
+  replicaCount: 3  # More replicas for HA
+  
+  image:
+    tag: "v0.1.0"  # Use specific version tag
+    pullPolicy: IfNotPresent
+  
+  # Enable ConfigMap watching for dynamic configuration updates
+  configWatch:
+    enabled: true
+    reloadInterval: 10
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "1000m"
+  
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 70
+  
+  # Pod anti-affinity for HA
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - proxy
+            topologyKey: kubernetes.io/hostname
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+
+# Cache Node configuration for production
+node:
+  replicaCount: 5  # More nodes for production
+  
+  image:
+    tag: "v0.1.0"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "200m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+  
+  persistence:
+    enabled: true
+    storageClass: "fast-ssd"
+    accessMode: ReadWriteOnce
+    size: 50Gi
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3  # Ensure at least 3 nodes available
+  
+  # Pod anti-affinity for HA
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - node
+            topologyKey: kubernetes.io/hostname
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+
+# Dashboard configuration for production
+dashboard:
+  replicaCount: 2  # HA dashboard
+  
+  image:
+    tag: "v0.1.0"
+    pullPolicy: IfNotPresent
+  
+  ingress:
+    enabled: true
+    className: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    hosts:
+      - host: yao-oracle.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: yao-oracle-dashboard-tls
+        hosts:
+          - yao-oracle.example.com
+  
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  
+  # Pod anti-affinity for HA
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values:
+                    - dashboard
+            topologyKey: kubernetes.io/hostname
+
+# Production configuration
+config:
+  # Business namespaces with resource limits
+  namespaces:
+    - name: game-prod
+      apikey: ""  # Set via --set or external secrets
+      description: "Production gaming application"
+      maxMemoryMB: 2048
+      maxKeys: 500000
+      defaultTTL: 3600
+      
+    - name: ads-prod
+      apikey: ""  # Set via --set or external secrets
+      description: "Production advertisement service"
+      maxMemoryMB: 1024
+      maxKeys: 250000
+      defaultTTL: 1800
+      
+    - name: analytics-prod
+      apikey: ""  # Set via --set or external secrets
+      description: "Production analytics service"
+      maxMemoryMB: 4096
+      maxKeys: 1000000
+      defaultTTL: 7200
+  
+  # Dashboard configuration
+  dashboard:
+    password: ""  # Set via --set or external secrets
+    refreshInterval: 10
+    authEnabled: true
+    sessionTimeout: 60
+    display:
+      showNodeDetails: true
+      showNamespaceStats: true
+      showConnectionStats: true
+      maxRecentOperations: 200
+
+# RBAC
+rbac:
+  create: true
+
+# Network policies enabled in production
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Priority class for production workloads
+priorityClassName: "high-priority"
+

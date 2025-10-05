@@ -1,0 +1,290 @@
+---
+alwaysApply: true
+---
+
+# Yao-Oracle Project Structure Guide
+
+## Architecture Overview
+
+This project implements a distributed KV cache system with **four main microservices**:
+
+1. **Proxy** (`cmd/proxy/`): The API gateway and routing layer
+   - Handles business namespace isolation
+   - Implements consistent hashing for request routing  
+   - Provides API key authentication
+   - Reports QPS/latency/error metrics to Admin via gRPC
+   - Hot-reloadable configuration via Kubernetes Informer
+
+2. **Cache Node** (`cmd/node/`): The dumb storage layer
+   - Pure KV storage with GET/SET/DELETE + TTL
+   - Namespace-agnostic (receives namespace from Proxy)
+   - Reports hit/miss/memory/hotkey metrics to Admin via gRPC
+   - Deployed as StatefulSet for horizontal scaling
+
+3. **Admin** (`cmd/admin/`): The observability control plane
+   - Collects metrics from Proxy and Node via gRPC
+   - Aggregates data in-memory (no external DB)
+   - Provides gRPC streaming API for Dashboard
+   - Pushes real-time updates via bidirectional streams
+   - Monitors cluster health and triggers events
+
+4. **Dashboard** (`frontend/dashboard/`): The visualization layer
+   - Pure frontend: Flutter Web
+   - Deployed as Nginx static site
+   - Communicates ONLY with Admin service (gRPC streams)
+   - No Go backend - completely decoupled from business logic
+
+---
+
+## Directory Structure (High-Level)
+
+```
+yao-oracle/
+├── cmd/                  # Main entry points for Go microservices
+│   ├── proxy/            # Proxy service entry point
+│   ├── node/             # Cache Node service entry point
+│   └── admin/            # Admin service entry point
+│
+├── core/                 # Shared core modules (reusable across Go services)
+│   ├── config/           # Kubernetes API config loading & Informer watching
+│   ├── discovery/        # Kubernetes Endpoints API service discovery
+│   ├── hash/             # Consistent hashing implementation
+│   ├── kv/               # KV storage abstraction
+│   ├── auth/             # API key authentication
+│   ├── metrics/          # Metrics collection and aggregation
+│   └── utils/            # Common utilities (logger, helpers, etc.)
+│
+├── internal/             # Service-specific implementations (not shared)
+│   ├── proxy/            # Proxy-specific business logic
+│   ├── node/             # Node-specific business logic
+│   └── admin/            # Admin-specific business logic
+│
+├── api/                  # Protocol Buffers API definitions
+│   ├── buf.yaml          # Buf workspace configuration
+│   ├── buf.gen.yaml      # Buf code generation configuration
+│   └── yao/oracle/v1/    # API definitions (versioned)
+│       ├── proxy.proto
+│       ├── node.proto
+│       ├── metrics.proto
+│       ├── dashboard.proto
+│       ├── admin.proto
+│       └── common.proto
+│
+├── pb/                   # Generated Go code from proto files (gitignored)
+│   └── yao/oracle/v1/    # Generated gRPC stubs and Protobuf types
+│
+├── helm/                 # Helm chart for Kubernetes deployment
+│   └── yao-oracle/       # Main Helm chart
+│       ├── Chart.yaml
+│       ├── values.yaml
+│       ├── values-*.yaml # Environment-specific overrides
+│       └── templates/    # Kubernetes manifests (organized by service)
+│
+├── frontend/             # Frontend projects directory
+│   └── dashboard/        # Flutter Web dashboard project
+│       ├── lib/          # Flutter source code
+│       │   ├── main.dart
+│       │   ├── core/     # gRPC client, state management, utilities
+│       │   ├── pages/    # Page-level widgets
+│       │   └── widgets/  # Reusable widgets
+│       ├── pubspec.yaml  # Flutter dependencies
+│       └── web/          # Web-specific assets
+│
+├── docs/                 # Project documentation
+│   └── *.md              # Design docs, specifications, guides
+│
+├── scripts/              # Automation scripts (build, deploy, utilities)
+│   └── *.sh
+│
+├── build/                # Docker build context and Dockerfiles
+│   ├── proxy.Dockerfile
+│   ├── node.Dockerfile
+│   ├── admin.Dockerfile
+│   └── dashboard.Dockerfile
+│
+├── bin/                  # Compiled Go binaries (gitignored)
+│
+├── Makefile              # Unified command interface
+├── go.mod
+├── go.sum
+└── README.md
+```
+
+**Note**: Subdirectory details within `core/`, `internal/`, `helm/templates/`, `frontend/dashboard/lib/` may evolve. This structure provides the high-level organization; specific file placement should follow logical grouping and service boundaries.
+
+---
+
+## Key Design Principles
+
+### Module Boundaries
+
+- **`core/`**: Pure, reusable logic with no service-specific dependencies
+  - Must be importable by any service
+  - Well-tested and documented
+  - No circular dependencies
+  - Contains shared abstractions (config, discovery, storage, auth, metrics)
+
+- **`internal/`**: Service-specific implementations
+  - Can import from `core/`
+  - Cannot be imported by other projects (Go's internal package rule)
+  - Contains server setup, handlers, service-specific logic
+  - Each subdirectory (`proxy/`, `node/`, `admin/`) is self-contained
+
+- **`cmd/`**: Entry points only
+  - Minimal logic (just initialization and startup)
+  - Wire dependencies from `core/` and `internal/`
+  - Parse flags and environment variables
+  - Each subdirectory has single `main.go` file
+
+- **`api/`**: Protobuf-first API design
+  - All service APIs defined via Protocol Buffers
+  - Versioned under `yao/oracle/v{version}/`
+  - Use Buf for code generation, linting, breaking change detection
+  - Generated code placed in `pb/` (gitignored, regenerated on build)
+
+- **`dashboard/`**: Pure frontend project
+  - Flutter Web application (completely separate from Go backend)
+  - Only communicates with Admin service via gRPC
+  - Deployed as static site with Nginx
+  - Has its own dependency management (`pubspec.yaml`)
+
+---
+
+## Data Flow
+
+### KV Operations (Client ↔ Cache)
+```
+Client → Proxy (API Key auth) 
+       → Consistent Hash Routing 
+       → Cache Node (storage) 
+       → Response back to Client
+```
+
+### Observability Pipeline
+```
+Proxy/Node → gRPC Metrics Stream → Admin (aggregation) 
+                                   → gRPC Stream → Dashboard (visualization)
+```
+
+### Configuration Management
+```
+Kubernetes API (ConfigMap/Secret) 
+  → Informer (hot reload) 
+  → Proxy/Admin (in-memory config update)
+  → No file mounting, no service restart
+```
+
+See [configuration-management.mdc](mdc:.cursor/rules/configuration-management.mdc) for details.
+
+---
+
+## Service-Specific Configuration
+
+### Proxy & Admin
+- Load environment variables at startup (ports, log level, resource names)
+- Connect to Kubernetes API using `InClusterConfig()`
+- Read Secret data directly from Kubernetes API
+- Start Kubernetes Informer to watch for config changes
+- Support hot reload without restart
+
+### Cache Node
+- **Stateless configuration**: only reads environment variables
+- **No Kubernetes API access** (no ServiceAccount/RBAC needed)
+- Receives namespace from Proxy in each request
+- Focuses purely on storage operations
+
+### Dashboard
+- **Pure frontend**: no configuration loading in production
+- Build-time environment variables only (Admin gRPC endpoint)
+- All dynamic config comes from Admin service at runtime
+
+---
+
+## File Naming Conventions
+
+- Main entry points: `main.go` in `cmd/*/`
+- Server setup: `server.go` in `internal/*/`
+- Interfaces: Use descriptive names (e.g., `cache.go`, `ring.go`, `storage.go`)
+- Tests: `*_test.go` alongside the code they test
+- Protobuf files: `{service}.proto` in `api/yao/oracle/v1/`
+
+---
+
+## Import Path Rules
+
+- External packages first, then standard library, then internal
+- Group imports with blank lines between groups
+- Generated proto code imports in separate group
+
+**Example**:
+```go
+import (
+    "context"
+    "fmt"
+    "time"
+    
+    "github.com/gin-gonic/gin"
+    "google.golang.org/grpc"
+    
+    oraclev1 "yao-oracle/pb/yao/oracle/v1"
+    
+    "yao-oracle/core/auth"
+    "yao-oracle/core/hash"
+)
+```
+
+---
+
+## API Definition Strategy
+
+- **All service APIs defined via Protocol Buffers** in `api/` directory
+- Use **Buf** for code generation, linting, and breaking change detection
+- Generated Go code placed in `pb/` (gitignored, regenerated on build)
+- Services communicate via gRPC for performance and type safety
+- Dashboard uses gRPC-Web (generated Dart code from same proto files)
+
+---
+
+## Docker Build Strategy
+
+- Use **Docker buildx** for multi-platform builds (linux/amd64, linux/arm64)
+- Dockerfiles located in `build/` directory
+- Use multi-stage builds for smaller image sizes
+- Each service has its own Dockerfile
+- Build process handles proto generation automatically
+- Dashboard Dockerfile: Flutter build + Nginx deployment
+
+---
+
+## Best Practices
+
+### DO:
+- ✅ Keep `core/` modules pure and reusable
+- ✅ Use Protobuf for all inter-service communication
+- ✅ Follow module boundaries strictly (no circular deps)
+- ✅ Place service-specific logic in `internal/{service}/`
+- ✅ Use Kubernetes API directly (no file mounting for config)
+- ✅ Implement hot reload via Kubernetes Informer
+- ✅ Keep `cmd/` minimal (just wiring)
+- ✅ Version APIs properly (`yao/oracle/v1`)
+- ✅ Regenerate proto code on every build
+
+### DON'T:
+- ❌ Import `internal/` packages from other services
+- ❌ Put service-specific logic in `core/`
+- ❌ Mount ConfigMap/Secret as files (use K8s API)
+- ❌ Hard-code configuration in source code
+- ❌ Create Go backend for Dashboard (it's pure frontend)
+- ❌ Skip proto generation during builds
+- ❌ Break API compatibility without version bump
+- ❌ Commit generated code (`pb/`, `frontend/dashboard/lib/generated/`)
+
+---
+
+## Related Documentation
+
+- Configuration Management: [configuration-management.mdc](mdc:.cursor/rules/configuration-management.mdc)
+- Dashboard Architecture: [dashboard.mdc](mdc:.cursor/rules/dashboard.mdc)
+- Admin Service: [admin.mdc](mdc:.cursor/rules/admin.mdc)
+- Protobuf & Buf: [protobuf-and-buf.mdc](mdc:.cursor/rules/protobuf-and-buf.mdc)
+- Infrastructure: [infrastructure.mdc](mdc:.cursor/rules/infrastructure.mdc)

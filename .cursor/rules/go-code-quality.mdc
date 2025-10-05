@@ -1,0 +1,336 @@
+---
+globs: *.go
+---
+
+# Go Code Quality Standards
+
+## File Size Limits
+
+- **Maximum 500 lines per file** (excluding tests)
+- If a file exceeds this limit, split it into multiple focused files
+- Each file should have a single, clear responsibility
+
+## Function Design
+
+### Size Constraints
+- **Maximum 50 lines per function**
+- **Maximum 4 parameters per function** (use structs for more)
+- If a function is too long, decompose it into smaller, focused helper functions
+
+### Decoupling Principles
+- **Single Responsibility**: Each function does ONE thing well
+- **Dependency Injection**: Pass dependencies as parameters, not globals
+- **Interface Segregation**: Define small, focused interfaces
+- **No side effects**: Pure functions whenever possible
+
+### Example of Good Decoupling
+
+```go
+// BAD: Tightly coupled, multiple responsibilities
+func processRequest(key string) error {
+    // Validation
+    if key == "" {
+        return errors.New("empty key")
+    }
+    
+    // Auth
+    if !isAuthorized() {
+        return errors.New("unauthorized")
+    }
+    
+    // Hashing
+    node := hashRing.GetNode(key)
+    
+    // Network call
+    resp, err := http.Get(node + "/get?key=" + key)
+    // ... more logic
+}
+
+// GOOD: Decoupled, single responsibilities
+func processRequest(req *Request, auth Authenticator, router Router, client HTTPClient) (*Response, error) {
+    // Each step is delegated to a specialized component
+    if err := validateRequest(req); err != nil {
+        return nil, fmt.Errorf("validation failed: %w", err)
+    }
+    
+    if err := auth.Authenticate(req.APIKey); err != nil {
+        return nil, fmt.Errorf("authentication failed: %w", err)
+    }
+    
+    targetNode := router.Route(req.Key)
+    
+    return client.ForwardRequest(targetNode, req)
+}
+
+// Each function is small, focused, and testable
+func validateRequest(req *Request) error {
+    if req == nil {
+        return ErrNilRequest
+    }
+    if req.Key == "" {
+        return ErrEmptyKey
+    }
+    return nil
+}
+```
+
+## Documentation Standards
+
+**Every exported symbol MUST have a comprehensive comment in English.**
+
+### Package Comments
+
+Every package must have a package-level comment in `doc.go` or above the package declaration:
+
+```go
+// Package hash implements consistent hashing with virtual nodes for
+// distributed cache node selection.
+//
+// The hash ring distributes keys across multiple nodes using the FNV-1a
+// hash function. Virtual nodes (replicas) are added to improve distribution
+// uniformity.
+//
+// Example usage:
+//     ring := hash.NewRing()
+//     ring.AddNode("node-1")
+//     ring.AddNode("node-2")
+//     targetNode := ring.GetNode("user:12345")
+//
+package hash
+```
+
+### Type Comments
+
+Document every exported type with:
+- What it represents
+- Key fields and their purposes
+- When/how it should be used
+
+```go
+// Ring represents a consistent hash ring that distributes keys across
+// multiple nodes using virtual nodes for better balance.
+//
+// Ring is safe for concurrent reads but writes must be synchronized
+// externally using the provided mutex methods.
+//
+// Virtual nodes (replicas) improve distribution uniformity. The default
+// replica count is 150 per physical node.
+type Ring struct {
+    // nodes maps virtual node hashes to physical node identifiers
+    // Key: hash value (uint32), Value: physical node name (string)
+    nodes map[uint32]string
+    
+    // sortedHashes contains all virtual node hashes in sorted order
+    // for efficient binary search during key lookup
+    sortedHashes []uint32
+    
+    // replicas is the number of virtual nodes per physical node
+    // Higher values provide better distribution but increase memory
+    replicas int
+    
+    // mu protects concurrent access to nodes and sortedHashes
+    mu sync.RWMutex
+}
+```
+
+### Function Comments
+
+Every exported function must document:
+1. **What** it does (one-line summary)
+2. **Parameters**: Each parameter's purpose and constraints
+3. **Return values**: What each return value represents
+4. **Errors**: When and why errors are returned
+5. **Side effects**: Any state changes or I/O operations
+6. **Example**: For complex functions, show usage
+
+```go
+// AddNode registers a new physical node in the hash ring by creating
+// multiple virtual nodes (replicas) for better key distribution.
+//
+// Parameters:
+//   - nodeID: Unique identifier for the physical node (e.g., "cache-0", "10.0.1.5:8080")
+//             Must not be empty. Duplicate nodeIDs are allowed but discouraged.
+//
+// Side effects:
+//   - Acquires write lock on the ring
+//   - Creates r.replicas virtual nodes in the hash space
+//   - Re-sorts the hash ring (O(n log n) operation)
+//
+// Example:
+//     ring := NewRing()
+//     ring.AddNode("cache-node-1")
+//     ring.AddNode("cache-node-2")
+//
+func (r *Ring) AddNode(nodeID string) {
+    // Implementation details with inline comments
+}
+```
+
+### Variable Comments
+
+Document package-level variables and complex local variables:
+
+```go
+// defaultTTL is the default time-to-live for cache entries in seconds.
+// Entries without explicit TTL will expire after this duration.
+const defaultTTL = 3600
+
+// ErrKeyNotFound is returned when a cache key does not exist.
+// This is not considered a critical error and should be handled gracefully.
+var ErrKeyNotFound = errors.New("key not found")
+```
+
+### Inline Comments
+
+Use inline comments to explain:
+- **Why**, not what (code should be self-documenting for "what")
+- Complex algorithms or business logic
+- Non-obvious constraints or edge cases
+- Workarounds for external issues
+
+```go
+func (r *Ring) GetNode(key string) string {
+    if len(r.sortedHashes) == 0 {
+        // No nodes available - return empty string to signal caller
+        // to handle gracefully (e.g., return error to client)
+        return ""
+    }
+    
+    // Use FNV-1a instead of MD5 for better performance
+    // while maintaining good distribution properties
+    hash := r.hashKey(key)
+    
+    // Binary search to find the first virtual node >= hash
+    // If not found, wrap around to the first node (consistent hashing property)
+    idx := sort.Search(len(r.sortedHashes), func(i int) bool {
+        return r.sortedHashes[i] >= hash
+    })
+    
+    // Wrap around to beginning if we reached the end
+    if idx >= len(r.sortedHashes) {
+        idx = 0
+    }
+    
+    return r.nodes[r.sortedHashes[idx]]
+}
+```
+
+## Error Handling
+
+### Error Wrapping
+
+Always wrap errors with context:
+
+```go
+// BAD
+if err != nil {
+    return err
+}
+
+// GOOD
+if err != nil {
+    return fmt.Errorf("failed to load config from %s: %w", configPath, err)
+}
+```
+
+### Custom Errors
+
+Define sentinel errors for specific conditions:
+
+```go
+// Define at package level with clear documentation
+var (
+    // ErrUnauthorized is returned when API key validation fails
+    ErrUnauthorized = errors.New("unauthorized: invalid API key")
+    
+    // ErrNodeNotFound is returned when no cache node is available for routing
+    ErrNodeNotFound = errors.New("no cache node available")
+)
+```
+
+## Testing Requirements
+
+- Every exported function must have tests
+- Aim for >80% code coverage
+- Test file names: `*_test.go`
+- Use table-driven tests for multiple cases
+
+```go
+func TestRing_GetNode(t *testing.T) {
+    tests := []struct {
+        name     string      // Test case name
+        nodes    []string    // Initial nodes to add
+        key      string      // Key to look up
+        wantNode string      // Expected node (empty if any is acceptable)
+        wantErr  bool        // Whether we expect an error
+    }{
+        {
+            name:     "single node returns that node",
+            nodes:    []string{"node-1"},
+            key:      "user:123",
+            wantNode: "node-1",
+            wantErr:  false,
+        },
+        // More test cases...
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            ring := NewRing()
+            for _, node := range tt.nodes {
+                ring.AddNode(node)
+            }
+            
+            got := ring.GetNode(tt.key)
+            
+            if tt.wantNode != "" && got != tt.wantNode {
+                t.Errorf("GetNode() = %v, want %v", got, tt.wantNode)
+            }
+        })
+    }
+}
+```
+
+## Interface Design
+
+Keep interfaces small and focused:
+
+```go
+// Storage defines the interface for KV storage operations.
+// Implementations must be safe for concurrent use.
+type Storage interface {
+    // Get retrieves the value for the given key.
+    // Returns ErrKeyNotFound if key doesn't exist.
+    Get(ctx context.Context, key string) ([]byte, error)
+    
+    // Set stores a key-value pair with the specified TTL in seconds.
+    // TTL of 0 means no expiration.
+    Set(ctx context.Context, key string, value []byte, ttl int) error
+    
+    // Delete removes the key from storage.
+    // Returns nil if key doesn't exist (idempotent).
+    Delete(ctx context.Context, key string) error
+}
+```
+
+## Code Organization Within Files
+
+Standard order within a `.go` file:
+
+1. Package documentation
+2. Package declaration
+3. Imports
+4. Constants
+5. Variables
+6. Type definitions
+7. Constructor functions
+8. Methods (grouped by type)
+9. Helper functions (unexported)
+
+## Naming Conventions
+
+- **Packages**: Short, lowercase, single word (e.g., `hash`, `auth`, `kv`)
+- **Interfaces**: Noun or adjective (e.g., `Storage`, `Authenticator`, `Configurable`)
+- **Functions**: Verb or verb phrase (e.g., `GetNode`, `ValidateKey`, `LoadConfig`)
+- **Constants**: CamelCase, descriptive (e.g., `defaultReplicas`, `maxRetries`)
+- **Errors**: Start with `Err` (e.g., `ErrNotFound`, `ErrInvalidConfig`)

@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package yao.oracle.v1;
+
+option go_package = "yao-oracle/pb/yao/oracle/v1;oraclev1";
+
+// ProxyService defines the client-facing API with namespace isolation.
+service ProxyService {
+  // Get retrieves a value by key (with API key authentication).
+  rpc Get(ProxyGetRequest) returns (ProxyGetResponse);
+  
+  // Set stores a key-value pair (with API key authentication).
+  rpc Set(ProxySetRequest) returns (ProxySetResponse);
+  
+  // Delete removes a key (with API key authentication).
+  rpc Delete(ProxyDeleteRequest) returns (ProxyDeleteResponse);
+  
+  // BatchGet retrieves multiple keys in a single request.
+  rpc BatchGet(ProxyBatchGetRequest) returns (ProxyBatchGetResponse);
+  
+  // Health checks proxy health and cluster status.
+  rpc Health(ProxyHealthRequest) returns (ProxyHealthResponse);
+}
+
+// ProxyGetRequest includes API key for authentication.
+message ProxyGetRequest {
+  // api_key authenticates the request and determines namespace
+  string api_key = 1;
+  
+  // key is the cache key (namespace will be prefixed automatically)
+  string key = 2;
+}
+
+// ProxyGetResponse returns the value or error.
+message ProxyGetResponse {
+  // found indicates whether the key exists
+  bool found = 1;
+  
+  // value is the cached data
+  bytes value = 2;
+  
+  // ttl is the remaining time-to-live in seconds
+  int32 ttl = 3;
+  
+  // node is the cache node that served this request
+  string node = 4;
+}
+
+// ProxySetRequest includes API key for authentication.
+message ProxySetRequest {
+  // api_key authenticates the request and determines namespace
+  string api_key = 1;
+  
+  // key is the cache key (namespace will be prefixed automatically)
+  string key = 2;
+  
+  // value is the data to cache
+  bytes value = 3;
+  
+  // ttl is the time-to-live in seconds (0 = no expiration)
+  int32 ttl = 4;
+}
+
+// ProxySetResponse indicates success or failure.
+message ProxySetResponse {
+  // success indicates if the operation succeeded
+  bool success = 1;
+  
+  // message provides error details if success=false
+  string message = 2;
+  
+  // node is the cache node that handled this request
+  string node = 3;
+}
+
+// ProxyDeleteRequest includes API key for authentication.
+message ProxyDeleteRequest {
+  // api_key authenticates the request and determines namespace
+  string api_key = 1;
+  
+  // key is the cache key (namespace will be prefixed automatically)
+  string key = 2;
+}
+
+// ProxyDeleteResponse indicates success of deletion.
+message ProxyDeleteResponse {
+  // success indicates if the operation succeeded
+  bool success = 1;
+  
+  // existed indicates if the key existed before deletion
+  bool existed = 2;
+  
+  // node is the cache node that handled this request
+  string node = 3;
+}
+
+// ProxyBatchGetRequest retrieves multiple keys at once.
+message ProxyBatchGetRequest {
+  // api_key authenticates the request and determines namespace
+  string api_key = 1;
+  
+  // keys are the cache keys to retrieve
+  repeated string keys = 2;
+}
+
+// ProxyBatchGetResponse returns results for all requested keys.
+message ProxyBatchGetResponse {
+  // results maps keys to their values (only includes found keys)
+  map<string, bytes> results = 1;
+  
+  // nodes_used lists which cache nodes were queried
+  repeated string nodes_used = 2;
+}
+
+// ProxyHealthRequest checks proxy and cluster health.
+message ProxyHealthRequest {}
+
+// ProxyHealthResponse provides cluster health information.
+message ProxyHealthResponse {
+  // healthy indicates if the proxy is operational
+  bool healthy = 1;
+  
+  // namespaces_count is the number of configured namespaces
+  int32 namespaces_count = 2;
+  
+  // nodes_healthy is the number of healthy cache nodes
+  int32 nodes_healthy = 3;
+  
+  // nodes_total is the total number of cache nodes
+  int32 nodes_total = 4;
+  
+  // message provides additional status information
+  string message = 5;
+}
+

@@ -1,0 +1,14 @@
+{{- if and .Values.node.enabled .Values.node.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-node
+  labels:
+    {{- include "yao-oracle.node.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.node.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.node.selectorLabels" . | nindent 6 }}
+{{- end }}
+

@@ -1,0 +1,147 @@
+{{- if .Values.node.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-node
+  labels:
+    {{- include "yao-oracle.node.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "yao-oracle.fullname" . }}-node
+  replicas: {{ .Values.node.replicaCount }}
+  {{- with .Values.node.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.node.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Node service uses only environment variables - no ConfigMap/Secret needed
+        {{- with .Values.global.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "yao-oracle.node.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* Node service does NOT need ServiceAccount - it's fully stateless */}}
+      {{- /* Node does NOT access Kubernetes API - only uses environment variables */}}
+      securityContext:
+        {{- toYaml .Values.node.podSecurityContext | nindent 8 }}
+      containers:
+      - name: node
+        securityContext:
+          {{- toYaml .Values.node.securityContext | nindent 12 }}
+        image: {{ include "yao-oracle.node.image" . }}
+        imagePullPolicy: {{ .Values.node.image.pullPolicy }}
+        ports:
+        - name: grpc
+          containerPort: {{ .Values.node.service.grpcPort }}
+          protocol: TCP
+        - name: health
+          containerPort: {{ .Values.node.service.healthPort | default 9090 }}
+          protocol: TCP
+        - name: metrics
+          containerPort: {{ .Values.node.service.metricsPort | default 9100 }}
+          protocol: TCP
+        {{- with .Values.node.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.node.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.node.resources | nindent 12 }}
+        env:
+        # ===== Cache Node Configuration =====
+        # Node service uses ONLY environment variables (no Kubernetes API access)
+        # Node is fully stateless and receives namespace info from Proxy
+        - name: GRPC_PORT
+          value: {{ .Values.node.service.grpcPort | quote }}
+        - name: HEALTH_PORT
+          value: {{ .Values.node.service.healthPort | default 9090 | quote }}
+        - name: METRICS_PORT
+          value: {{ .Values.node.service.metricsPort | default 9100 | quote }}
+        - name: LOG_LEVEL
+          value: {{ .Values.node.logLevel | default "info" | quote }}
+        - name: MAX_MEMORY_MB
+          value: {{ .Values.node.maxMemoryMB | default 1024 | quote }}
+        - name: MAX_KEYS
+          value: {{ .Values.node.maxKeys | default 1000000 | quote }}
+        - name: EVICTION_POLICY
+          value: {{ .Values.node.evictionPolicy | default "LRU" | quote }}
+        
+        # ===== Pod Metadata =====
+        # Auto-injected by Kubernetes for logging
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # ===== Custom Environment Variables =====
+        # Additional user-defined env vars from values.yaml
+        {{- with .Values.node.env }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        volumeMounts:
+        {{- if .Values.node.persistence.enabled }}
+        - name: data
+          mountPath: /data
+        {{- end }}
+        {{- if .Values.node.securityContext.readOnlyRootFilesystem }}
+        - name: tmp
+          mountPath: /tmp
+        {{- end }}
+      volumes:
+      {{- if .Values.node.securityContext.readOnlyRootFilesystem }}
+      - name: tmp
+        emptyDir: {}
+      {{- end }}
+      {{- with .Values.node.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.node.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.node.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+  {{- if .Values.node.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        {{- include "yao-oracle.node.labels" . | nindent 8 }}
+    spec:
+      accessModes:
+        - {{ .Values.node.persistence.accessMode }}
+      {{- if .Values.node.persistence.storageClass }}
+      storageClassName: {{ .Values.node.persistence.storageClass }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.node.persistence.size }}
+  {{- end }}
+{{- end }}
+

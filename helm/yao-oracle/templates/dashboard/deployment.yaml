@@ -1,0 +1,140 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-dashboard
+  labels:
+    {{- include "yao-oracle.dashboard.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.dashboard.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.dashboard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.global.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "yao-oracle.dashboard.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "yao-oracle.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.dashboard.podSecurityContext | nindent 8 }}
+      containers:
+      - name: dashboard
+        securityContext:
+          {{- toYaml .Values.dashboard.securityContext | nindent 12 }}
+        image: {{ include "yao-oracle.dashboard.image" . }}
+        imagePullPolicy: {{ .Values.dashboard.image.pullPolicy }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.dashboard.service.httpPort }}
+          protocol: TCP
+        - name: health
+          containerPort: {{ .Values.dashboard.service.healthPort | default 9090 }}
+          protocol: TCP
+        {{- if .Values.dashboard.metrics.enabled }}
+        - name: metrics
+          containerPort: {{ .Values.dashboard.service.metricsPort | default 9100 }}
+          protocol: TCP
+        {{- end }}
+        {{- with .Values.dashboard.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.dashboard.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.dashboard.resources | nindent 12 }}
+        env:
+        # ===== Infrastructure Configuration (Layer 1) =====
+        # Static configuration loaded at startup from environment variables
+        # These require Pod restart to change
+        - name: HTTP_PORT
+          value: {{ .Values.dashboard.service.httpPort | quote }}
+        - name: HEALTH_PORT
+          value: {{ .Values.dashboard.service.healthPort | default 9090 | quote }}
+        {{- if .Values.dashboard.metrics.enabled }}
+        - name: METRICS_PORT
+          value: {{ .Values.dashboard.service.metricsPort | default 9100 | quote }}
+        {{- end }}
+        - name: LOG_LEVEL
+          value: {{ .Values.dashboard.logLevel | default "info" | quote }}
+        
+        # ===== Kubernetes API Configuration (Layer 2) =====
+        # Services read configuration directly from Kubernetes API
+        # NO file mounting - services use InClusterConfig() to connect
+        - name: SECRET_NAME
+          value: {{ include "yao-oracle.fullname" . }}-secret
+        {{- if .Values.config.configMapEnabled }}
+        - name: CONFIGMAP_NAME
+          value: {{ include "yao-oracle.fullname" . }}-config
+        {{- end }}
+        
+        # ===== Service Discovery =====
+        # Headless service DNS for discovering Proxy and Node Pod IPs
+        - name: PROXY_SERVICE_DNS
+          value: {{ include "yao-oracle.fullname" . }}-proxy-headless.{{ .Release.Namespace }}.svc.cluster.local
+        - name: NODE_SERVICE_DNS
+          value: {{ include "yao-oracle.fullname" . }}-node.{{ .Release.Namespace }}.svc.cluster.local
+        - name: DISCOVERY_MODE
+          value: "k8s"
+        - name: REFRESH_INTERVAL
+          value: {{ .Values.config.dashboard.refreshInterval | default 5 | quote }}
+        
+        # ===== Pod Metadata =====
+        # Auto-injected by Kubernetes for service discovery and logging
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # ===== Custom Environment Variables =====
+        # Additional user-defined env vars from values.yaml
+        {{- with .Values.dashboard.env }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.dashboard.securityContext.readOnlyRootFilesystem }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        {{- end }}
+      {{- if .Values.dashboard.securityContext.readOnlyRootFilesystem }}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      {{- end }}
+      {{- with .Values.dashboard.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dashboard.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dashboard.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+{{- end }}
+

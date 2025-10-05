@@ -1,0 +1,148 @@
+/* Error boundary styles */
+
+.error-boundary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    padding: 2rem;
+}
+
+.error-boundary-content {
+    max-width: 600px;
+    text-align: center;
+    background: rgba(244, 63, 94, 0.1);
+    border: 2px solid rgba(244, 63, 94, 0.3);
+    border-radius: 12px;
+    padding: 3rem 2rem;
+}
+
+.error-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.error-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #f43f5e;
+    margin-bottom: 1rem;
+}
+
+.error-message {
+    font-size: 1.1rem;
+    color: #e5e7eb;
+    margin-bottom: 1.5rem;
+    line-height: 1.6;
+}
+
+.error-details {
+    text-align: left;
+    margin-bottom: 1.5rem;
+}
+
+.error-details summary {
+    cursor: pointer;
+    color: #9ca3af;
+    font-weight: 600;
+    padding: 0.5rem;
+    user-select: none;
+}
+
+.error-details summary:hover {
+    color: #e5e7eb;
+}
+
+.error-stack {
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 1rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+    color: #d1d5db;
+    margin-top: 0.5rem;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.error-reset-button {
+    background: linear-gradient(135deg, #f43f5e, #e11d48);
+    color: white;
+    border: none;
+    padding: 0.75rem 2rem;
+    font-size: 1rem;
+    font-weight: 700;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(244, 63, 94, 0.3);
+}
+
+.error-reset-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(244, 63, 94, 0.4);
+}
+
+.error-reset-button:active {
+    transform: translateY(0);
+}
+
+/* Error display component (for async errors) */
+
+.error-display {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    padding: 1.5rem;
+}
+
+.error-display-content {
+    text-align: center;
+    background: rgba(244, 63, 94, 0.05);
+    border: 1px solid rgba(244, 63, 94, 0.2);
+    border-radius: 8px;
+    padding: 2rem;
+    max-width: 400px;
+}
+
+.error-display .error-icon {
+    font-size: 2.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.error-display-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f43f5e;
+    margin-bottom: 0.75rem;
+}
+
+.error-display-message {
+    font-size: 0.95rem;
+    color: #d1d5db;
+    margin-bottom: 1rem;
+    line-height: 1.5;
+}
+
+.error-retry-button {
+    background: linear-gradient(135deg, #3b82f6, #2563eb);
+    color: white;
+    border: none;
+    padding: 0.5rem 1.5rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.error-retry-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.error-retry-button:active {
+    transform: translateY(0);
+}

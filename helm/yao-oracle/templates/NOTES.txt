@@ -1,0 +1,164 @@
+{{- $fullname := include "yao-oracle.fullname" . -}}
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+To learn more about the release, try:
+
+  $ helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+  $ helm get all {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+===========================
+📦 Yao-Oracle Components
+===========================
+
+{{- if .Values.proxy.enabled }}
+
+🔀 Proxy Service:
+  - Replicas: {{ .Values.proxy.replicaCount }}
+  - Service: {{ $fullname }}-proxy:{{ .Values.proxy.service.port }}
+  {{- if .Values.proxy.autoscaling.enabled }}
+  - Autoscaling: Enabled ({{ .Values.proxy.autoscaling.minReplicas }}-{{ .Values.proxy.autoscaling.maxReplicas }} replicas)
+  {{- end }}
+{{- end }}
+
+{{- if .Values.node.enabled }}
+
+💾 Cache Nodes:
+  - Replicas: {{ .Values.node.replicaCount }}
+  - Service: {{ $fullname }}-node (Headless)
+  {{- if .Values.node.persistence.enabled }}
+  - Persistence: Enabled ({{ .Values.node.persistence.size }})
+  {{- end }}
+{{- end }}
+
+{{- if .Values.dashboard.enabled }}
+
+📊 Dashboard:
+  - Replicas: {{ .Values.dashboard.replicaCount }}
+  - Service: {{ $fullname }}-dashboard:{{ .Values.dashboard.service.port }}
+  {{- if .Values.dashboard.ingress.enabled }}
+  - Ingress:
+    {{- range .Values.dashboard.ingress.hosts }}
+    - http{{ if $.Values.dashboard.ingress.tls }}s{{ end }}://{{ .host }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+===========================
+🔑 Access Information
+===========================
+
+{{- if .Values.dashboard.enabled }}
+
+Dashboard Access:
+{{- if .Values.dashboard.ingress.enabled }}
+  {{- range .Values.dashboard.ingress.hosts }}
+  Visit: http{{ if $.Values.dashboard.ingress.tls }}s{{ end }}://{{ .host }}/login.html
+  {{- end }}
+{{- else }}
+  Run the following command to access the dashboard:
+
+  $ kubectl port-forward -n {{ .Release.Namespace }} svc/{{ $fullname }}-dashboard {{ .Values.dashboard.service.port }}:{{ .Values.dashboard.service.port }}
+
+  Then visit: http://localhost:{{ .Values.dashboard.service.port }}/login.html
+{{- end }}
+
+  Default Password: {{ .Values.config.dashboard.password }}
+  ⚠️  IMPORTANT: Change the default password immediately!
+  
+  Connected Services:
+  - Proxy: {{ $fullname }}-proxy.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.proxy.service.grpcPort }}
+  - Cache Nodes ({{ .Values.node.replicaCount }}):
+    {{- range $i := until (int .Values.node.replicaCount) }}
+    {{ $fullname }}-node-{{ $i }}.{{ $fullname }}-node.{{ $.Release.Namespace }}.svc.cluster.local:{{ $.Values.node.service.grpcPort }}
+    {{- end }}
+
+{{- end }}
+
+{{- if .Values.proxy.enabled }}
+
+Proxy Service Access:
+  Internal: {{ $fullname }}-proxy.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.proxy.service.port }}
+
+  For external access, run:
+  $ kubectl port-forward -n {{ .Release.Namespace }} svc/{{ $fullname }}-proxy {{ .Values.proxy.service.port }}:{{ .Values.proxy.service.port }}
+
+API Key Configuration:
+  {{- range .Values.config.namespaces }}
+  - Namespace: {{ .name }}
+    API Key: {{ .apikey }}
+    Description: {{ .description }}
+  {{- end }}
+
+  ⚠️  IMPORTANT: Change the default API keys in production!
+{{- end }}
+
+===========================
+📝 Next Steps
+===========================
+
+1. Verify all pods are running:
+   $ kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Check service endpoints:
+   $ kubectl get svc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+3. View logs:
+   $ kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=proxy --tail=100
+   $ kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=node --tail=100
+   $ kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=dashboard --tail=100
+
+4. Test the cache:
+   $ kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
+     curl -H "X-API-Key: {{ (index .Values.config.namespaces 0).apikey }}" \
+     http://{{ $fullname }}-proxy.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.proxy.service.port }}/set?key=test&value=hello
+
+5. Dynamic Configuration Updates:
+   Configuration hot reload is ENABLED via Kubernetes Informer.
+   You can update configuration without restarting pods:
+   
+   a) Add a new namespace:
+      $ helm upgrade {{ .Release.Name }} ./helm/yao-oracle \
+        --set config.namespaces[{{ len .Values.config.namespaces }}].name=new-service \
+        --set config.namespaces[{{ len .Values.config.namespaces }}].apikey=new-secret-key \
+        --set config.namespaces[{{ len .Values.config.namespaces }}].description="New service" \
+        -n {{ .Release.Namespace }} --reuse-values
+   
+   b) Scale cache nodes:
+      $ helm upgrade {{ .Release.Name }} ./helm/yao-oracle \
+        --set node.replicaCount=5 \
+        -n {{ .Release.Namespace }} --reuse-values
+   
+   The Proxy and Dashboard will automatically detect and reload the updated Secret!
+
+{{- if .Values.proxy.metrics.enabled }}
+
+6. View metrics (if Prometheus is installed):
+   $ kubectl port-forward -n {{ .Release.Namespace }} svc/{{ $fullname }}-proxy {{ .Values.proxy.service.metricsPort }}:{{ .Values.proxy.service.metricsPort }}
+   Then visit: http://localhost:{{ .Values.proxy.service.metricsPort }}/metrics
+{{- end }}
+
+===========================
+⚠️  Security Reminders
+===========================
+
+{{- if or (eq .Values.config.dashboard.password "change-me-admin-password") (eq .Values.config.dashboard.password "dev-admin") }}
+❌ You are using the default dashboard password!
+   Update it immediately with:
+   $ helm upgrade {{ .Release.Name }} ./helm/yao-oracle \
+     --set config.dashboard.password=YOUR_SECURE_PASSWORD \
+     -n {{ .Release.Namespace }}
+{{- end }}
+
+{{- range .Values.config.namespaces }}
+{{- if hasPrefix "change-me" .apikey }}
+❌ You are using a default API key for namespace "{{ .name }}"!
+   Update it with a secure key in production.
+{{- end }}
+{{- end }}
+
+For more information, visit:
+  Documentation: https://github.com/eggybyte/yao-oracle
+  Issues: https://github.com/eggybyte/yao-oracle/issues
+

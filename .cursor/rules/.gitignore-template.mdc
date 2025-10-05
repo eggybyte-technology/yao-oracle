@@ -1,0 +1,73 @@
+---
+description: Standard .gitignore template for yao-oracle project
+---
+
+# .gitignore Template
+
+Standard `.gitignore` for yao-oracle project with Go, Protocol Buffers, Docker, and Kubernetes.
+
+```gitignore
+# Binaries and build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+*.test
+*.out
+coverage.*
+
+# Generated code (regenerated on build)
+/pb/
+
+# Dependencies
+vendor/
+go.work
+
+# IDE configurations
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+
+# Temporary and local files
+tmp/
+temp/
+*.tmp
+*.log
+local/
+scratch/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*-secret.yaml
+secrets/
+
+# Packaged Helm charts
+helm/*.tgz
+```
+
+## Key Points
+
+**SHOULD commit:**
+- Source code (`cmd/`, `core/`, `internal/`)
+- Proto definitions (`api/`)
+- Scripts, Dockerfiles, Helm charts
+- `go.mod`, `go.sum`, `api/buf.lock`
+
+**Should NOT commit:**
+- Generated code (`pb/`)
+- Compiled binaries (`bin/`)
+- IDE configs, logs, temp files
+- Secrets and `.env` files

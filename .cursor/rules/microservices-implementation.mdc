@@ -1,0 +1,735 @@
+---
+description: Microservices implementation patterns and configuration loading
+---
+
+# Microservices Implementation Guide
+
+This guide covers implementation patterns for the three main services in Yao-Oracle.
+
+## Service Architecture
+
+### 1. Proxy Service
+- **Role**: API gateway and routing layer
+- **Config Needs**: Environment variables + Secret with hot reload
+- **Dependencies**: Cache Node endpoints (discovered via Kubernetes API)
+- **Metrics**: Reports QPS/latency/errors to Admin via gRPC
+
+### 2. Cache Node Service
+- **Role**: Dumb storage layer (pure KV)
+- **Config Needs**: Environment variables only
+- **Dependencies**: None (receives namespace from Proxy in requests)
+- **Metrics**: Reports hit/miss/memory/hotkeys to Admin via gRPC
+
+### 3. Admin Service (NEW)
+- **Role**: Observability control plane
+- **Config Needs**: Environment variables + Secret with hot reload
+- **Dependencies**: Proxy/Node endpoints (for metrics collection)
+- **Functions**: Collect metrics, aggregate data, provide REST/WebSocket API
+
+### 4. Dashboard Service (CHANGED)
+- **Role**: Pure frontend visualization
+- **Config Needs**: Build-time environment variables only (no runtime config)
+- **Dependencies**: Admin service (REST + WebSocket)
+- **Tech Stack**: React + TypeScript + Vite + Nginx 1.29.1
+
+---
+
+## Configuration Loading Patterns
+
+### Proxy Service Implementation
+
+**Required Initialization Steps:**
+
+1. **Load Environment Variables** (Infrastructure Config)
+   - `GRPC_PORT`, `HTTP_PORT`, `METRICS_PORT`, `LOG_LEVEL`
+   - `NAMESPACE`, `CONFIGMAP_NAME`, `SECRET_NAME`
+   - `NODE_HEADLESS_SERVICE` (for Cache Node discovery)
+   - `DISCOVERY_MODE`, `DISCOVERY_INTERVAL`
+   - Pod metadata: `POD_NAME`, `POD_NAMESPACE`, `POD_IP`
+
+2. **Load Business Config from Kubernetes API**
+   - Connect to Kubernetes API using `InClusterConfig()`
+   - Create K8sConfigLoader instance
+   - Read Secret directly via Kubernetes client (no file mounting)
+   - Parse JSON config from Secret data (`config-with-secrets.json` key)
+   - Extract namespace list with API keys
+
+3. **Validate Configuration**
+   - Check for at least one namespace
+   - Validate namespace names are unique
+   - Ensure API keys are present and non-empty
+   - Validate resource limits (maxMemoryMB, defaultTTL, etc.)
+
+4. **Initialize Server**
+   - Create gRPC server with loaded config
+   - Initialize consistent hash ring
+   - Build API key → namespace mapping
+   - Setup Kubernetes client for node discovery
+
+5. **Setup Kubernetes Informer (Hot Reload)**
+   - Create DynamicConfigWatcher with namespace and Secret name
+   - Setup callback for config changes
+   - Start Informer in goroutine
+   - On change: parse → validate → apply atomically (with RWMutex)
+
+6. **Setup Service Discovery**
+   - Create Kubernetes client for Endpoints API
+   - Discover Cache Nodes via Headless Service
+   - Refresh node list periodically (every DISCOVERY_INTERVAL seconds)
+   - Update consistent hash ring when topology changes
+
+7. **Start Server**
+   - Start gRPC server in goroutine
+   - Start metrics server in goroutine
+   - Wait for shutdown signal (SIGINT, SIGTERM)
+
+8. **Graceful Shutdown**
+   - Stop Kubernetes Informer
+   - Stop service discovery
+   - Stop gRPC server with graceful shutdown
+   - Close all connections
+
+**Code Structure Pattern:**
+```go
+func main() {
+    // 1. Load env vars (infrastructure config)
+    // 2. Setup logger
+    // 3. Connect to Kubernetes API
+    // 4. Load initial config from Secret
+    // 5. Validate config
+    // 6. Create server with config
+    // 7. Setup Kubernetes Informer for hot reload
+    // 8. Setup service discovery for Cache Nodes
+    // 9. Start server in goroutine
+    // 10. Wait for shutdown signal
+    // 11. Cleanup (stop Informer, stop discovery, shutdown server)
+}
+```
+
+### Cache Node Service Implementation
+
+**Required Initialization Steps:**
+
+1. **Load Environment Variables ONLY**
+   - `GRPC_PORT`, `METRICS_PORT`, `LOG_LEVEL`
+   - `MAX_MEMORY_MB`, `MAX_KEYS` (storage limits)
+   - Pod metadata: `POD_NAME`
+
+2. **Initialize Server (No Config File)**
+   - Create gRPC server
+   - Initialize KV storage with limits
+   - Setup TTL expiration mechanism
+
+3. **Start Server**
+   - Start gRPC server
+   - Start metrics server
+   - Wait for shutdown signal
+
+4. **Graceful Shutdown**
+   - Stop gRPC server
+   - Close connections
+   - Optional: Persist data (if persistence enabled)
+
+**Key Difference from Proxy:**
+- **NO config file loading**
+- **NO config watcher**
+- Namespace info comes from Proxy in each request
+
+**Code Structure Pattern:**
+```go
+func main() {
+    // 1. Load env vars
+    // 2. Setup logger
+    // 3. Create server (no config file)
+    // 4. Start server
+    // 5. Wait for shutdown signal
+    // 6. Cleanup
+}
+```
+
+### Admin Service Implementation (NEW)
+
+**Required Initialization Steps:**
+
+1. **Load Environment Variables** (Infrastructure Config)
+   - `GRPC_PORT`, `HTTP_PORT`, `METRICS_PORT`, `LOG_LEVEL`
+   - `NAMESPACE`, `SECRET_NAME`
+   - `PROXY_HEADLESS_SERVICE`, `NODE_HEADLESS_SERVICE`
+   - `METRICS_RETENTION_HOURS`, `METRICS_BUFFER_SIZE`
+
+2. **Load Business Config from Kubernetes API**
+   - Connect to Kubernetes API using `InClusterConfig()`
+   - Create K8sConfigLoader instance
+   - Read Secret directly via Kubernetes client (no file mounting)
+   - Parse JSON config from Secret data (`config-with-secrets.json` key)
+   - Extract namespace list (for providing to Dashboard)
+
+3. **Validate Configuration**
+   - Check namespace list exists
+   - Validate retention settings
+
+4. **Initialize Server Components**
+   - Create gRPC server for metrics collection
+   - Create HTTP server with Gin framework
+   - Initialize metrics aggregator with ring buffer
+   - Setup WebSocket hub for real-time broadcasting
+   - Setup REST API routes
+
+5. **Setup Kubernetes Informer (Hot Reload)**
+   - Create DynamicConfigWatcher with namespace and Secret name
+   - Setup callback for namespace list changes
+   - Start Informer in goroutine
+   - On change: update namespace list atomically
+
+6. **Setup Service Discovery**
+   - Create Kubernetes client for Endpoints API
+   - Discover all Proxy Pods via Headless Service
+   - Discover all Cache Node Pods via Headless Service
+   - Refresh discovery periodically
+   - Track instance health
+
+7. **Start Servers**
+   - Start gRPC server in goroutine (port 8080)
+   - Start HTTP server in goroutine (port 8081)
+   - Start WebSocket broadcaster in goroutine
+   - Wait for shutdown signal (SIGINT, SIGTERM)
+
+8. **Graceful Shutdown**
+   - Stop Kubernetes Informer
+   - Stop service discovery
+   - Stop gRPC server
+   - Stop HTTP server with context timeout
+   - Close all connections
+
+**Code Structure Pattern:**
+```go
+func main() {
+    // 1. Load env vars (infrastructure config)
+    // 2. Setup logger
+    // 3. Connect to Kubernetes API
+    // 4. Load initial config from Secret (namespaces)
+    // 5. Validate config
+    // 6. Create gRPC server (metrics collection)
+    // 7. Create HTTP server (REST + WebSocket)
+    // 8. Initialize metrics aggregator
+    // 9. Setup Kubernetes Informer for hot reload
+    // 10. Setup service discovery for Proxy/Nodes
+    // 11. Start gRPC server in goroutine
+    // 12. Start HTTP server in goroutine
+    // 13. Start WebSocket broadcaster in goroutine
+    // 14. Wait for shutdown signal
+    // 15. Cleanup (stop Informer, stop discovery, shutdown servers)
+}
+```
+
+### Dashboard Service Implementation (CHANGED TO FRONTEND ONLY)
+
+**Dashboard is now a pure frontend React application. No Go implementation required.**
+
+See [.cursor/rules/dashboard.mdc](mdc:.cursor/rules/dashboard.mdc) for frontend architecture.
+
+---
+
+## Server Implementation Patterns
+
+### Proxy Server with Hot Reload
+
+**Server Structure Requirements:**
+
+```go
+type Server struct {
+    config      *config.ProxyConfig
+    configMutex sync.RWMutex // Protect config during hot reload
+    
+    ring        *hash.ConsistentHashRing
+    grpcServer  *grpc.Server
+    // ... other fields
+}
+```
+
+**Key Methods Required:**
+- `NewServer(serverConfig, cfg)` - Constructor
+- `UpdateConfig(newCfg)` - Apply new config (hot reload)
+- `GetConfig()` - Thread-safe config read
+- `ValidateAPIKey(apiKey)` - Check API key and return namespace
+- `Start(ctx)` - Start gRPC server
+- `Stop()` - Graceful shutdown
+
+**Hot Reload Pattern:**
+```go
+func (s *Server) UpdateConfig(newCfg *config.ProxyConfig) error {
+    s.configMutex.Lock()
+    defer s.configMutex.Unlock()
+    
+    // Update namespace list and API keys
+    s.config = newCfg
+    
+    // Rebuild API key map
+    s.buildAPIKeyMap()
+    
+    // Note: Hash ring is NOT rebuilt here
+    // Node topology changes require rediscovery
+    
+    return nil
+}
+```
+
+### Cache Node Server (Stateless)
+
+**Server Structure Requirements:**
+
+```go
+type Server struct {
+    storage     *storage.KVStore
+    grpcServer  *grpc.Server
+    // ... other fields
+    // NOTE: No config field, no config mutex
+}
+```
+
+**Key Methods Required:**
+- `NewServer(config)` - Constructor (only env vars)
+- `Get(ctx, req)` - Handle GET request
+- `Set(ctx, req)` - Handle SET request
+- `Delete(ctx, req)` - Handle DELETE request
+- `Start(ctx)` - Start gRPC server
+- `Stop()` - Graceful shutdown
+
+**Important: No `UpdateConfig` Method**
+- Node doesn't watch config
+- Namespace info comes from Proxy in each gRPC request
+
+### Admin Server with Hot Reload (NEW)
+
+**Server Structure Requirements:**
+
+```go
+type Server struct {
+    config         *config.AdminConfig
+    configMutex    sync.RWMutex
+    
+    grpcServer     *grpc.Server
+    httpServer     *http.Server
+    aggregator     *MetricsAggregator
+    wsHub          *WebSocketHub
+    discovery      *ServiceDiscovery
+}
+```
+
+**Key Methods Required:**
+- `NewServer(serverConfig, cfg)` - Constructor
+- `UpdateConfig(newCfg)` - Apply new config (hot reload)
+- `Start(ctx)` - Start gRPC + HTTP servers
+- `Stop()` - Graceful shutdown
+- `CollectMetrics()` - gRPC streaming RPC handler
+- `BroadcastUpdate(msg)` - WebSocket broadcast
+
+**Metrics Collection Pattern:**
+```go
+func (s *Server) ReportProxyMetrics(stream pb.MetricsService_ReportProxyMetricsServer) error {
+    for {
+        metrics, err := stream.Recv()
+        if err == io.EOF {
+            return nil
+        }
+        if err != nil {
+            return err
+        }
+        
+        // Store in aggregator
+        s.aggregator.AddProxyMetrics(metrics)
+        
+        // Broadcast to WebSocket clients
+        s.wsHub.Broadcast(&WebSocketMessage{
+            Type: "proxy_update",
+            Data: metrics,
+        })
+    }
+}
+```
+
+**Hot Reload Pattern:**
+```go
+func (s *Server) UpdateConfig(newCfg *config.AdminConfig) error {
+    s.configMutex.Lock()
+    defer s.configMutex.Unlock()
+    
+    // Update namespace list
+    s.config = newCfg
+    
+    return nil
+}
+```
+
+---
+
+## Configuration Structure
+
+### core/config Package
+
+**Required Files:**
+```go
+// core/config/config.go
+package config
+
+// Common structures
+type Namespace struct {
+    Name         string `json:"name"`
+    APIKey       string `json:"apikey,omitempty"`    // Only in Secret
+    Description  string `json:"description"`
+    MaxMemoryMB  int    `json:"maxMemoryMB,omitempty"`
+    MaxKeys      int    `json:"maxKeys,omitempty"`
+    DefaultTTL   int    `json:"defaultTTL,omitempty"`
+}
+
+// Proxy-specific config
+type ProxyConfig struct {
+    Namespaces []Namespace `json:"namespaces"`
+}
+
+// Admin-specific config (NEW)
+type AdminConfig struct {
+    Namespaces []Namespace `json:"namespaces"`
+}
+
+// Dashboard config (REMOVED - no longer needed)
+// Dashboard is pure frontend with build-time config only
+
+// Full config structure (matches Secret JSON)
+type FullConfig struct {
+    Proxy *ProxyConfig `json:"proxy"`
+    Admin *AdminConfig `json:"admin"`
+}
+```
+
+```go
+// core/config/k8s_loader.go - Kubernetes API config loader (NO file I/O)
+package config
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
+)
+
+type K8sConfigLoader struct {
+    clientset *kubernetes.Clientset
+}
+
+func NewK8sConfigLoader() (*K8sConfigLoader, error) {
+    cfg, err := rest.InClusterConfig()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+    }
+    
+    clientset, err := kubernetes.NewForConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create clientset: %w", err)
+    }
+    
+    return &K8sConfigLoader{clientset: clientset}, nil
+}
+
+func (l *K8sConfigLoader) LoadProxyConfig(ctx context.Context, namespace, secretName string) (*ProxyConfig, error) {
+    fullConfig, err := l.loadFullConfig(ctx, namespace, secretName)
+    if err != nil {
+        return nil, err
+    }
+    
+    if fullConfig.Proxy == nil {
+        return nil, fmt.Errorf("proxy config not found in secret")
+    }
+    
+    return fullConfig.Proxy, nil
+}
+
+func (l *K8sConfigLoader) LoadAdminConfig(ctx context.Context, namespace, secretName string) (*AdminConfig, error) {
+    fullConfig, err := l.loadFullConfig(ctx, namespace, secretName)
+    if err != nil {
+        return nil, err
+    }
+    
+    if fullConfig.Admin == nil {
+        return nil, fmt.Errorf("admin config not found in secret")
+    }
+    
+    return fullConfig.Admin, nil
+}
+
+func (l *K8sConfigLoader) loadFullConfig(ctx context.Context, namespace, secretName string) (*FullConfig, error) {
+    // Read Secret directly from Kubernetes API (NO file mounting)
+    secret, err := l.clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to get secret %s/%s: %w", namespace, secretName, err)
+    }
+    
+    // Get config-with-secrets.json from Secret data
+    configJSON, ok := secret.Data["config-with-secrets.json"]
+    if !ok {
+        return nil, fmt.Errorf("config-with-secrets.json not found in secret %s/%s", namespace, secretName)
+    }
+    
+    // Parse JSON
+    var fullConfig FullConfig
+    if err := json.Unmarshal(configJSON, &fullConfig); err != nil {
+        return nil, fmt.Errorf("failed to parse config JSON: %w", err)
+    }
+    
+    return &fullConfig, nil
+}
+```
+
+**Key Functions Required:**
+- `NewK8sConfigLoader() (*K8sConfigLoader, error)` - Create loader with Kubernetes client
+- `LoadProxyConfig(ctx, namespace, secretName) (*ProxyConfig, error)` - Load from Kubernetes API
+- `LoadAdminConfig(ctx, namespace, secretName) (*AdminConfig, error)` - Load from Kubernetes API  
+- `ValidateProxyConfig(cfg *ProxyConfig) error` - Validate config
+- `ValidateAdminConfig(cfg *AdminConfig) error` - Validate config
+
+**Removed Functions (No Longer Needed):**
+- ❌ `LoadProxyConfig(path string)` - File-based loading removed
+- ❌ `LoadDashboardConfig(path string)` - Removed (Dashboard is pure frontend)
+- ❌ Any file I/O operations
+
+### Service Discovery Implementation (core/discovery)
+
+**Implementation Requirements:**
+
+**Use Kubernetes Endpoints API:**
+- Connect using `InClusterConfig()` from client-go
+- Query Endpoints for Headless Service
+- Extract Pod IPs from Endpoints
+- Refresh periodically to detect topology changes
+- Support graceful shutdown
+
+**Key Components:**
+```go
+package discovery
+
+import (
+    "context"
+    "fmt"
+    "time"
+    
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
+)
+
+type ServiceDiscovery struct {
+    clientset       *kubernetes.Clientset
+    namespace       string
+    serviceName     string
+    refreshInterval time.Duration
+    stopChan        chan struct{}
+}
+
+func NewServiceDiscovery(namespace, serviceName string, refreshInterval int) (*ServiceDiscovery, error) {
+    cfg, err := rest.InClusterConfig()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+    }
+    
+    clientset, err := kubernetes.NewForConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create clientset: %w", err)
+    }
+    
+    return &ServiceDiscovery{
+        clientset:       clientset,
+        namespace:       namespace,
+        serviceName:     serviceName,
+        refreshInterval: time.Duration(refreshInterval) * time.Second,
+        stopChan:        make(chan struct{}),
+    }, nil
+}
+
+func (sd *ServiceDiscovery) DiscoverPods(ctx context.Context) ([]string, error) {
+    ep, err := sd.clientset.CoreV1().Endpoints(sd.namespace).Get(ctx, sd.serviceName, metav1.GetOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to get endpoints: %w", err)
+    }
+    
+    var addresses []string
+    for _, subset := range ep.Subsets {
+        for _, addr := range subset.Addresses {
+            addresses = append(addresses, addr.IP)
+        }
+    }
+    
+    return addresses, nil
+}
+
+func (sd *ServiceDiscovery) StartPeriodicDiscovery(ctx context.Context, onUpdate func([]string)) {
+    ticker := time.NewTicker(sd.refreshInterval)
+    defer ticker.Stop()
+    
+    // Initial discovery
+    if pods, err := sd.DiscoverPods(ctx); err == nil {
+        onUpdate(pods)
+    }
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-sd.stopChan:
+            return
+        case <-ticker.C:
+            pods, err := sd.DiscoverPods(ctx)
+            if err != nil {
+                fmt.Printf("❌ Discovery failed: %v\n", err)
+                continue
+            }
+            fmt.Printf("🔍 Discovered %d pods for %s\n", len(pods), sd.serviceName)
+            onUpdate(pods)
+        }
+    }
+}
+
+func (sd *ServiceDiscovery) Stop() {
+    close(sd.stopChan)
+}
+```
+
+**Usage in Proxy:**
+```go
+// Discover Cache Nodes
+nodeDiscovery, _ := discovery.NewServiceDiscovery(
+    namespace, 
+    "yao-node-headless", 
+    discoveryInterval,
+)
+
+go nodeDiscovery.StartPeriodicDiscovery(ctx, func(nodes []string) {
+    server.UpdateNodeList(nodes)  // Update consistent hash ring
+})
+```
+
+**Usage in Admin:**
+```go
+// Discover Proxy Pods
+proxyDiscovery, _ := discovery.NewServiceDiscovery(
+    namespace, 
+    "yao-proxy-headless", 
+    refreshInterval,
+)
+
+go proxyDiscovery.StartPeriodicDiscovery(ctx, func(proxies []string) {
+    admin.UpdateProxyList(proxies)
+})
+
+// Discover Node Pods
+nodeDiscovery, _ := discovery.NewServiceDiscovery(
+    namespace, 
+    "yao-node-headless", 
+    refreshInterval,
+)
+
+go nodeDiscovery.StartPeriodicDiscovery(ctx, func(nodes []string) {
+    admin.UpdateNodeList(nodes)
+})
+```
+
+---
+
+## Best Practices
+
+### DO:
+- ✅ Load environment variables first (before Kubernetes API calls)
+- ✅ Use **Kubernetes Informer** for config hot reload (not fsnotify)
+- ✅ Use **Kubernetes Endpoints API** for service discovery (not DNS)
+- ✅ Validate configuration before applying
+- ✅ Use RWMutex for thread-safe config access during hot reload
+- ✅ Log config changes with timestamps and details
+- ✅ Implement graceful shutdown (stop Informers, stop discovery, close servers)
+- ✅ Use context for cancellation propagation
+- ✅ Keep Node service stateless (no config file dependency, no discovery)
+- ✅ Use helper function `getEnv(key, default)` for env vars
+- ✅ Setup proper RBAC permissions for Kubernetes API access
+- ✅ Handle Kubernetes API errors gracefully (retry on failure)
+- ✅ Wait for Informer cache sync before using data
+
+### DON'T:
+- ❌ Use fsnotify for ConfigMap watching (use Informer instead)
+- ❌ Use DNS for service discovery (use Endpoints API instead)
+- ❌ Apply invalid configuration (always validate first)
+- ❌ Block requests during config reload (use RWMutex)
+- ❌ Restart server for config changes (use hot reload)
+- ❌ Load config files in Node service (only env vars)
+- ❌ Panic on config errors (log and keep old config)
+- ❌ Forget to stop Informers and discovery on shutdown
+- ❌ Read config without mutex protection in multi-threaded code
+- ❌ Ignore context cancellation in long-running operations
+- ❌ Forget to setup ServiceAccount and RBAC for services
+
+---
+
+## Testing Configuration Loading
+
+**Required Test Cases:**
+
+1. **Load Valid Config from Secret**
+   - Mock Kubernetes API client
+   - Create test Secret with valid config
+   - Load config successfully
+   - Verify config contents (namespaces, API keys, passwords)
+
+2. **Handle Invalid Config**
+   - Missing required fields (namespace, API key, password)
+   - Malformed JSON in Secret data
+   - Duplicate namespace names
+   - Empty API keys or passwords
+   - Invalid resource limits
+
+3. **Kubernetes Informer Hot Reload**
+   - Mock Kubernetes Informer
+   - Simulate Secret Update event
+   - Verify callback is called with new config
+   - Verify config is validated before applying
+   - Verify service updates without restart
+   - Verify old config remains if validation fails
+
+4. **Service Discovery**
+   - Mock Kubernetes Endpoints API
+   - Create test Endpoints with multiple Pod IPs
+   - Call DiscoverPods() and verify returned IPs
+   - Simulate Endpoints update (add/remove Pods)
+   - Verify periodic discovery triggers onUpdate callback
+
+5. **Concurrent Access Safety**
+   - Multiple goroutines reading config (GetConfig)
+   - One goroutine updating config (applyNewConfig)
+   - Verify no race conditions (use `go test -race`)
+   - Verify RWMutex protects config correctly
+
+6. **RBAC and Permissions**
+   - Test Informer fails without proper ServiceAccount
+   - Test discovery fails without Endpoints read permission
+   - Verify error handling when Kubernetes API is unreachable
+
+---
+
+## Summary
+
+**Configuration Loading by Service:**
+
+| Service   | Env Vars | ConfigMap | Secret | Hot Reload | Kubernetes API |
+|-----------|----------|-----------|--------|------------|----------------|
+| Proxy     | ✅       | ❌        | ✅     | ✅         | ✅             |
+| Node      | ✅       | ❌        | ❌     | ❌         | ❌             |
+| Admin     | ✅       | ❌        | ✅     | ✅         | ✅             |
+| Dashboard | ✅ (build-time) | ❌ | ❌     | ❌         | ❌             |
+
+**Key Takeaways:**
+1. Environment variables for infrastructure config (ports, paths, limits)
+2. Secret for business config with sensitive data (API keys, namespaces)
+3. Hot reload for Proxy and Admin (use Kubernetes Informer)
+4. Node is stateless and config-file-free
+5. Dashboard is pure frontend (no runtime config loading)
+6. Always validate config before applying
+7. Use mutex for thread-safe config access

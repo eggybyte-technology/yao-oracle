@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package yao.oracle.v1;
+
+option go_package = "yao-oracle/pb/yao/oracle/v1;oraclev1";
+
+// KeyValue represents a cache entry with metadata.
+message KeyValue {
+  // key is the cache key identifier
+  string key = 1;
+  
+  // value is the cached data (binary safe)
+  bytes value = 2;
+  
+  // ttl is the time-to-live in seconds
+  // 0 means no expiration
+  int32 ttl = 3;
+  
+  // namespace is the business namespace this key belongs to
+  string namespace = 4;
+  
+  // created_at is the Unix timestamp when this entry was created
+  int64 created_at = 5;
+  
+  // expires_at is the Unix timestamp when this entry expires
+  // 0 means no expiration
+  int64 expires_at = 6;
+}
+
+// Status represents operation result status.
+message Status {
+  // code is the status code (0 = success)
+  int32 code = 1;
+  
+  // message provides human-readable status description
+  string message = 2;
+}
+
+// Empty represents an empty message.
+message Empty {}
+

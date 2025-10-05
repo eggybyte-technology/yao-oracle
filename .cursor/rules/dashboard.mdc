@@ -1,0 +1,513 @@
+---
+description: Dashboard architecture, page structure, data flow, and UI implementation guidelines
+---
+
+# Dashboard Architecture & Implementation Guide — Flutter Web + gRPC
+
+## Overview
+
+Dashboard is a **pure frontend microservice** built with **Flutter Web**, deployed as Nginx static site. It communicates **ONLY with Admin service** via **gRPC bidirectional streams** for real-time monitoring, cache queries, Secret management, and configuration visualization.
+
+**Tech Stack**: Flutter Web + gRPC-Web + Protobuf + Riverpod + fl_chart
+
+---
+
+## Design Principles
+
+### 1. Frontend-Only Architecture
+- **NO Go backend** - completely decoupled from business logic
+- **Nginx** serves static files and proxies gRPC-Web requests to Admin service
+- Deployed as stateless Kubernetes service (horizontally scalable)
+- All business logic and data aggregation handled by Admin service
+
+### 2. Communication Protocol: gRPC Bidirectional Streams
+- **gRPC streaming** for real-time metrics push (replaces WebSocket)
+- **Unary gRPC calls** for cache queries and Secret management
+- Admin service provides unified gRPC API defined in `dashboard.proto`
+- All data exchange uses Protobuf for type safety and performance
+
+### 3. Protobuf-First API Design
+- All data structures defined in `api/yao/oracle/v1/dashboard.proto`
+- Generated Dart code (`dashboard.pb.dart`, `dashboard.pbgrpc.dart`) used by Flutter
+- No manual JSON parsing - fully type-safe communication
+- Version-controlled schema evolution via Buf
+
+---
+
+## gRPC Service Definition
+
+### Required Admin Service API (`dashboard.proto`)
+
+```protobuf
+service DashboardStream {
+  // Real-time metrics streaming (Admin → Dashboard)
+  rpc StreamMetrics(SubscribeRequest) returns (stream ClusterMetrics);
+  
+  // Cache query (unary)
+  rpc QueryCache(CacheQueryRequest) returns (CacheQueryResponse);
+  
+  // Secret management (update API keys)
+  rpc ManageSecret(SecretUpdateRequest) returns (SecretUpdateResponse);
+  
+  // ConfigMap retrieval
+  rpc GetConfig(ConfigRequest) returns (ConfigResponse);
+}
+```
+
+**Key Messages**:
+- `ClusterMetrics`: Contains `GlobalStats`, `NamespaceStats[]`, `NodeStats[]`
+- `GlobalStats`: QPS, latency, hit rate, memory, health score
+- `NamespaceStats`: Per-namespace metrics + API key info
+- `NodeStats`: Per-node memory, hit rate, latency, key count
+
+See [new-dashboard.md](mdc:docs/new-dashboard.md) for complete Protobuf definitions.
+
+---
+
+## Page Structure & Features (6 Pages)
+
+### 1️⃣ Global Overview Page (`/`)
+**Purpose**: One-screen cluster health dashboard
+
+**Key Components**:
+- **Health Gauge**: Composite health score (derived from hit rate, latency, memory)
+- **Real-time Charts**: QPS trend, latency curves (p50/p90/p99), hit rate trend
+- **Resource Cards**: Proxy count, Node count, Namespace count, total memory
+- **Topology View**: Interactive graph showing Proxy ↔ Node ↔ Namespace relationships
+
+**Data Source**: `StreamMetrics` → `ClusterMetrics.global`
+
+**Interactions**:
+- Click node in topology → navigate to Node Inspector
+- Hover node → show tooltip with metrics
+- Auto-refresh via gRPC stream (smooth animations)
+
+---
+
+### 2️⃣ Namespace Explorer Page (`/namespace`)
+**Purpose**: Namespace-level performance monitoring & API key management
+
+**Display Sections**:
+- **Namespace Cards**: Grid of cards showing Name, QPS, Hit Rate, Memory, TTL, Key Count
+- **Detail Expansion**: Click card → expand to show:
+  - Line charts (QPS, Hit Rate, Latency over time)
+  - API Key display (masked, e.g., `game-***-123`)
+  - ConfigMap info (Default TTL, Max Keys)
+  - Secret update history table
+- **Secret Management**: "🔑 Regenerate API Key" button → calls `ManageSecret` RPC
+
+**Data Source**: `StreamMetrics` → `ClusterMetrics.namespaces`
+
+**Interactions**:
+- Click "🔑 Regenerate" → show confirmation dialog → call `ManageSecret` → display success toast
+- When Secret updated → show "Updated" badge on card
+- Real-time metric curves update smoothly
+
+---
+
+### 3️⃣ Node Inspector Page (`/node`)
+**Purpose**: Deep-dive into individual Node behavior
+
+**Display Content**:
+- **Node Info Panel**: Node ID, IP, Namespace, Status, Uptime
+- **Real-time Charts**: Memory usage, Hit rate, Latency (smoothly updating)
+- **Heatmap**: Key count distribution over time
+- **Metric Cards**: Current QPS, Key Count, Memory, Hit Rate
+
+**Data Source**: `StreamMetrics` → `ClusterMetrics.nodes`
+
+**Interactions**:
+- Click Node ID → expand detail modal with recent logs (streamed via gRPC)
+- Error status → node card flashes red
+- Hover chart → show precise values in tooltip
+
+---
+
+### 4️⃣ Cache Query Center Page (`/cache`)
+**Purpose**: Debug tool for direct cache inspection
+
+**Query Interface**:
+- **Inputs**: Namespace dropdown (with autocomplete), Key text field
+- **Query Button**: Triggers `QueryCache` unary RPC
+- **Results Display**:
+  - Key / Value (JSON pretty-printed with syntax highlighting)
+  - TTL countdown animation
+  - Size in bytes
+  - Last access timestamp
+- **Action Buttons**: Delete cache, Refresh TTL
+
+**Data Source**: `QueryCache` unary RPC
+
+**Interactions**:
+- Type key → click Query → show results
+- Value display supports JSON folding/expansion
+- TTL countdown updates every second with animation
+- Delete button → confirmation → call Admin delete API
+
+---
+
+### 5️⃣ Config & Secret Logs Page (`/logs`)
+**Purpose**: Audit trail for ConfigMap/Secret changes
+
+**Log Table Columns**:
+- Namespace
+- Type (Secret / ConfigMap)
+- Update Time
+- Change Summary (e.g., "game-app: TTL 60 → 120")
+- Source (informer / manual)
+- Status (✅ Synced / ⚠️ Pending)
+
+**Data Source**: Admin aggregates Kubernetes Informer events
+
+**Interactions**:
+- Infinite scroll for historical logs
+- Diff highlighting (old vs new values)
+- Filter by Namespace or Type
+- Click log entry → show full diff modal
+
+---
+
+### 6️⃣ Settings Page (`/settings`)
+**Purpose**: User preferences and connection status
+
+**Settings Sections**:
+- **User Info**: Current admin username, JWT token expiry
+- **Refresh Interval**: Dropdown (5s / 10s / 30s)
+- **Theme**: Dark / Light mode toggle
+- **Connection Status**: 🟢 Connected / 🔴 Disconnected (real-time)
+- **Export**: Download current metrics as JSON
+
+---
+
+## UI/UX Design Guidelines
+
+### Visual Style (Cyberpunk Monitoring Dashboard)
+- **Color Scheme**: Deep blue + neon gradient lines (tech monitoring aesthetic)
+- **Fonts**: 
+  - Sans-serif: Inter (UI text)
+  - Monospace: JetBrains Mono (code, IDs, keys)
+- **Component Style**: Glassmorphism (frosted glass effect)
+  - Semi-transparent backgrounds with backdrop blur
+  - Subtle shadows + gradient borders
+  - Neon glow effects on interactive elements
+- **Animations**:
+  - Smooth curve updates (no jitter)
+  - Flash animations for updates
+  - Expand/collapse transitions with spring physics
+
+### Chart Library: `fl_chart`
+**Usage**:
+- Line charts: QPS, latency, hit rate trends
+- Bar charts: Hot key rankings
+- Pie/donut charts: Namespace distribution
+- Gauge charts: Health score, resource utilization
+
+**Configuration**:
+- Responsive layout with `LayoutBuilder`
+- Auto-scaling axes with readable units
+- Smooth animations on data updates
+- Interactive tooltips with precise values
+
+### Layout Strategy
+- **Responsive Design**: `LayoutBuilder` + `GridView` for adaptive layouts
+- **Mobile**: Single column (stacked cards)
+- **Tablet**: 2-column grid
+- **Desktop**: 3-4 column grid with sidebar navigation
+
+---
+
+## State Management: Riverpod
+
+### State Architecture
+```dart
+// Global metrics stream
+final metricsStreamProvider = StreamProvider<ClusterMetrics>((ref) {
+  final grpcClient = ref.watch(grpcClientProvider);
+  return grpcClient.streamMetrics(SubscribeRequest());
+});
+
+// Namespace-specific state
+final namespaceProvider = StateNotifierProvider.family<NamespaceState, String>((ref, namespace) {
+  return NamespaceState(namespace);
+});
+
+// Node-specific state
+final nodeProvider = StateNotifierProvider.family<NodeState, String>((ref, nodeId) {
+  return NodeState(nodeId);
+});
+
+// Cache query state
+final cacheQueryProvider = FutureProvider.family<CacheQueryResponse, CacheQuery>((ref, query) {
+  final grpcClient = ref.watch(grpcClientProvider);
+  return grpcClient.queryCache(query);
+});
+```
+
+**Patterns**:
+- **StreamProvider**: For real-time gRPC streams (metrics)
+- **FutureProvider**: For unary gRPC calls (cache query, secret update)
+- **StateNotifierProvider**: For UI state (filters, selections)
+- **Family providers**: For scoped state (per-namespace, per-node)
+
+---
+
+## Flutter Project Structure
+
+```
+frontend/dashboard/
+├── lib/
+│   ├── main.dart                   # Entry point
+│   ├── core/
+│   │   ├── grpc/
+│   │   │   ├── grpc_client.dart    # gRPC channel setup
+│   │   │   └── interceptors.dart   # Auth, logging interceptors
+│   │   ├── state/
+│   │   │   ├── providers.dart      # Riverpod providers
+│   │   │   ├── global_state.dart   # Global metrics state
+│   │   │   ├── namespace_state.dart # Namespace state
+│   │   │   └── node_state.dart     # Node state
+│   │   └── utils/
+│   │       ├── formatters.dart     # Number/time formatting
+│   │       └── theme.dart          # App theme definition
+│   ├── pages/
+│   │   ├── overview/
+│   │   │   ├── overview_page.dart
+│   │   │   └── widgets/            # Page-specific widgets
+│   │   ├── namespace/
+│   │   │   ├── namespace_page.dart
+│   │   │   └── namespace_detail.dart
+│   │   ├── node/
+│   │   │   ├── node_page.dart
+│   │   │   └── node_detail.dart
+│   │   ├── cache/
+│   │   │   └── cache_query_page.dart
+│   │   ├── logs/
+│   │   │   └── config_log_page.dart
+│   │   └── settings/
+│   │       └── settings_page.dart
+│   └── widgets/
+│       ├── charts/                # Chart wrappers (fl_chart)
+│       │   ├── line_chart.dart
+│       │   ├── gauge_chart.dart
+│       │   ├── bar_chart.dart
+│       │   └── topology_view.dart
+│       ├── cards/                 # Metric display cards
+│       │   ├── metric_card.dart
+│       │   ├── namespace_card.dart
+│       │   └── node_card.dart
+│       └── common/                # Reusable widgets
+│           ├── loading.dart
+│           ├── error_boundary.dart
+│           └── toast.dart
+├── pubspec.yaml
+├── web/
+└── README.md
+```
+
+---
+
+## gRPC Client Setup
+
+### Channel Configuration
+```dart
+// frontend/dashboard/lib/core/grpc/grpc_client.dart
+class GrpcClient {
+  late ClientChannel _channel;
+  late DashboardStreamClient _stub;
+  
+  void initialize(String host, int port, bool useTls) {
+    _channel = ClientChannel(
+      host,
+      port: port,
+      options: ChannelOptions(
+        credentials: useTls 
+          ? ChannelCredentials.secure() 
+          : ChannelCredentials.insecure(),
+      ),
+    );
+    
+    _stub = DashboardStreamClient(_channel);
+  }
+  
+  Stream<ClusterMetrics> streamMetrics(String? namespace) {
+    final request = SubscribeRequest()..namespace = namespace ?? '';
+    return _stub.streamMetrics(request);
+  }
+  
+  Future<CacheQueryResponse> queryCache(String namespace, String key) {
+    final request = CacheQueryRequest()
+      ..namespace = namespace
+      ..key = key;
+    return _stub.queryCache(request);
+  }
+  
+  Future<SecretUpdateResponse> updateSecret(String namespace, String newApiKey) {
+    final request = SecretUpdateRequest()
+      ..namespace = namespace
+      ..newApiKey = newApiKey;
+    return _stub.manageSecret(request);
+  }
+}
+```
+
+### Error Handling & Reconnection
+- **Exponential backoff**: 1s, 2s, 4s, 8s, max 30s
+- **Connection status indicator**: Show 🔴 Disconnected in UI
+- **Auto-resume**: Reconnect automatically, resubscribe to streams
+- **Timeout**: 30s timeout for unary calls
+
+---
+
+## Deployment Configuration
+
+### Build Command
+```bash
+flutter build web --release --web-renderer canvaskit
+```
+
+**Why CanvasKit**: Better performance for complex charts, consistent rendering
+
+### Nginx Configuration
+```nginx
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+    
+    # SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    
+    # Proxy gRPC-Web to Admin service
+    location /yao.oracle.dashboard.DashboardStream/ {
+        grpc_pass grpc://admin-service:8080;
+        grpc_set_header Host $host;
+    }
+}
+```
+
+### Environment Variables (Build-time)
+- `ADMIN_GRPC_HOST`: Admin service hostname (default: `admin-service`)
+- `ADMIN_GRPC_PORT`: Admin gRPC port (default: `8080`)
+- `USE_TLS`: Enable TLS for gRPC (default: `false`)
+
+**No runtime configuration** - all config baked into build.
+
+---
+
+## Performance Optimization
+
+### 1. gRPC Stream Handling
+- **Throttle updates**: Max 1 update per second to avoid excessive rebuilds
+- **Batch updates**: Accumulate metrics, rebuild once
+- **Selective subscriptions**: Subscribe to specific namespace if viewing detail page
+
+### 2. Chart Rendering
+- **Data point limits**: Keep max 100-200 points (ring buffer)
+- **Lazy loading**: Only render charts in viewport
+- **Smooth animations**: Use Flutter's built-in animation system
+
+### 3. State Management
+- **Provider scoping**: Use `.family` to scope state per namespace/node
+- **Memoization**: Cache computed values in `StateNotifier`
+- **Dispose properly**: Cancel streams when page unmounted
+
+---
+
+## Testing Guidelines
+
+### Unit Tests
+- **gRPC client**: Mock `DashboardStreamClient`, test request/response
+- **State notifiers**: Test state transitions
+- **Formatters**: Test number/time formatting
+
+### Widget Tests
+- **Chart widgets**: Test data transformation, rendering
+- **Cards**: Test metric display, status indicators
+- **Pages**: Test layout, interactions
+
+### Integration Tests
+- **gRPC flow**: Mock server, test stream handling, error scenarios
+- **Navigation**: Test page routing, navigation flows
+- **State updates**: Test Riverpod provider interactions
+
+---
+
+## Best Practices Summary
+
+### DO:
+- ✅ Use gRPC bidirectional streams for real-time data
+- ✅ Define all API contracts in Protobuf
+- ✅ Use Riverpod for state management (avoid setState for global state)
+- ✅ Implement auto-reconnection for gRPC streams
+- ✅ Use fl_chart for consistent chart rendering
+- ✅ Apply glassmorphism style for modern UI
+- ✅ Throttle stream updates to avoid excessive rebuilds
+- ✅ Use ring buffers for time series data
+- ✅ Build with CanvasKit renderer for performance
+- ✅ Implement loading states and error boundaries
+
+### DON'T:
+- ❌ Create a Go backend for Dashboard (it's pure frontend)
+- ❌ Use REST or WebSocket (use gRPC streams instead)
+- ❌ Connect directly to Proxy/Node (always via Admin)
+- ❌ Store unlimited data points (use ring buffer)
+- ❌ Ignore stream disconnection (implement reconnection)
+- ❌ Skip error handling (show user-friendly messages)
+- ❌ Hard-code gRPC endpoints (use environment variables)
+- ❌ Forget mobile responsiveness (use LayoutBuilder)
+- ❌ Over-complicate state (Riverpod is sufficient)
+- ❌ Skip accessibility (screen reader support, keyboard navigation)
+
+---
+
+## Integration with Admin Service
+
+### Expected Admin gRPC Implementation
+Admin service must implement `DashboardStream` service defined in `api/yao/oracle/v1/dashboard.proto`:
+- `StreamMetrics`: Push metrics every N seconds (configurable)
+- `QueryCache`: Forward query to Proxy, return result
+- `ManageSecret`: Update Secret in Kubernetes, return confirmation
+- `GetConfig`: Return current ConfigMap data
+
+### Data Flow
+```
+Flutter Dashboard → gRPC-Web → Nginx → Admin Service (gRPC)
+                                         ↓
+                              Kubernetes API (ConfigMap/Secret)
+                              Proxy/Node (metrics aggregation)
+```
+
+---
+
+## Maintenance & Evolution
+
+### When Adding New Metrics
+1. Update `dashboard.proto` with new fields
+2. Run `buf generate` to regenerate Dart code
+3. Update Flutter providers to handle new fields
+4. Add new chart/card components if needed
+5. Update Admin service to populate new fields
+
+### When Adding New Pages
+1. Create page widget in `frontend/dashboard/lib/pages/`
+2. Add route in main router
+3. Add navigation item in sidebar
+4. Define required gRPC methods if needed
+5. Implement state providers for new page
+
+### Performance Monitoring
+- Monitor build size (target: < 2MB gzipped)
+- Track initial load time (target: < 3s on 3G)
+- Monitor gRPC message frequency (target: < 10 msgs/sec)
+- Track chart rendering FPS (target: 60 FPS)
+
+---
+
+## Reference Documents
+
+- Dashboard specification: [docs/new-dashboard.md](mdc:docs/new-dashboard.md)
+- Project structure: See workspace rules
+- Configuration management: See workspace rules
+- Admin service API: [api/yao/oracle/v1/dashboard.proto](mdc:api/yao/oracle/v1/dashboard.proto) (to be created)

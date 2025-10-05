@@ -1,0 +1,130 @@
+/* Loading skeleton animations and styles */
+
+.skeleton-container {
+    width: 100%;
+}
+
+.skeleton-item {
+    margin-bottom: 1rem;
+}
+
+/* Base skeleton animation */
+@keyframes shimmer {
+    0% {
+        background-position: -1000px 0;
+    }
+
+    100% {
+        background-position: 1000px 0;
+    }
+}
+
+.skeleton-card,
+.skeleton-chart,
+.skeleton-table,
+.skeleton-text,
+.skeleton-header,
+.skeleton-value,
+.skeleton-chart-title,
+.skeleton-chart-body,
+.skeleton-table-header,
+.skeleton-table-row {
+    background: linear-gradient(90deg,
+            rgba(255, 255, 255, 0.05) 0%,
+            rgba(255, 255, 255, 0.1) 50%,
+            rgba(255, 255, 255, 0.05) 100%);
+    background-size: 1000px 100%;
+    animation: shimmer 2s infinite linear;
+    border-radius: 8px;
+}
+
+/* Card skeleton */
+.skeleton-card {
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.skeleton-header {
+    height: 1rem;
+    width: 40%;
+    margin-bottom: 1rem;
+}
+
+.skeleton-value {
+    height: 2.5rem;
+    width: 60%;
+    margin-bottom: 0.75rem;
+}
+
+/* Chart skeleton */
+.skeleton-chart {
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    flex-direction: column;
+}
+
+.skeleton-chart-title {
+    height: 1.5rem;
+    width: 30%;
+    margin-bottom: 1rem;
+}
+
+.skeleton-chart-body {
+    flex: 1;
+    width: 100%;
+    opacity: 0.5;
+}
+
+/* Table skeleton */
+.skeleton-table {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.skeleton-table-header {
+    height: 3rem;
+    margin-bottom: 1px;
+    border-radius: 0;
+}
+
+.skeleton-table-row {
+    height: 3.5rem;
+    margin-bottom: 1px;
+    border-radius: 0;
+}
+
+.skeleton-table-row:last-child {
+    margin-bottom: 0;
+}
+
+/* Text skeleton */
+.skeleton-text {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+/* Grid layouts */
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+@media (max-width: 768px) {
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+}

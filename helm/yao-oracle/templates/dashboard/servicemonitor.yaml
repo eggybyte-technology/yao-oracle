@@ -1,0 +1,17 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.metrics.enabled .Values.dashboard.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-dashboard
+  labels:
+    {{- include "yao-oracle.dashboard.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.dashboard.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: http
+    interval: {{ .Values.dashboard.metrics.serviceMonitor.interval }}
+    path: /metrics
+{{- end }}
+

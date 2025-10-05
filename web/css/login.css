@@ -1,0 +1,183 @@
+/* ===================================================================
+   Yao-Oracle Dashboard - Login Page Styles
+   =================================================================== */
+
+.login-wrapper {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: var(--space-lg);
+}
+
+.login-container {
+    width: 100%;
+    max-width: 400px;
+    background-color: var(--color-surface);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    padding: var(--space-2xl);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: var(--space-xl);
+}
+
+.login-logo {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto var(--space-md);
+    display: block;
+    border-radius: var(--radius-md);
+}
+
+.login-title {
+    font-size: var(--font-size-3xl);
+    font-weight: var(--font-weight-bold);
+    margin-bottom: var(--space-sm);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.login-subtitle {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin-bottom: 0;
+}
+
+.test-mode-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md);
+    margin-bottom: var(--space-lg);
+    background: linear-gradient(135deg, rgba(72, 187, 120, 0.1) 0%, rgba(72, 187, 120, 0.05) 100%);
+    border: 1px solid var(--color-success);
+    border-radius: var(--radius-md);
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+.test-mode-icon {
+    font-size: 2rem;
+    line-height: 1;
+}
+
+.test-mode-content {
+    flex: 1;
+}
+
+.test-mode-title {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-success);
+    margin-bottom: var(--space-xs);
+}
+
+.test-mode-text {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.test-mode-text strong {
+    color: var(--color-success);
+    font-weight: var(--font-weight-bold);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.error-message {
+    display: none;
+    padding: var(--space-md);
+    margin-bottom: var(--space-lg);
+    background-color: rgba(245, 101, 101, 0.1);
+    border: 1px solid var(--color-error);
+    border-radius: var(--radius-md);
+    color: var(--color-error-dark);
+    font-size: var(--font-size-sm);
+    text-align: center;
+}
+
+.error-message.show {
+    display: block;
+    animation: shake 0.3s ease-in-out;
+}
+
+@keyframes shake {
+
+    0%,
+    100% {
+        transform: translateX(0);
+    }
+
+    25% {
+        transform: translateX(-10px);
+    }
+
+    75% {
+        transform: translateX(10px);
+    }
+}
+
+.login-form {
+    margin-bottom: var(--space-xl);
+}
+
+.login-button {
+    width: 100%;
+    padding: var(--space-md);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-inverse);
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+}
+
+.login-button:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
+}
+
+.login-button:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.login-footer {
+    text-align: center;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.login-footer p {
+    margin-bottom: 0;
+}
+
+/* Dark Theme Adjustments for Login */
+[data-theme="dark"] .login-wrapper {
+    background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
+}
+
+[data-theme="dark"] .login-container {
+    background-color: var(--color-surface);
+}

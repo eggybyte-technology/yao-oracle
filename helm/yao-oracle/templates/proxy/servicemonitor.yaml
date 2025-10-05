@@ -1,0 +1,17 @@
+{{- if and .Values.proxy.enabled .Values.proxy.metrics.enabled .Values.proxy.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-proxy
+  labels:
+    {{- include "yao-oracle.proxy.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.proxy.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.proxy.metrics.serviceMonitor.interval }}
+    path: /metrics
+{{- end }}
+

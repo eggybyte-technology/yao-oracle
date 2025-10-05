@@ -1,0 +1,422 @@
+# Default values for yao-oracle.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings applied to all components
+global:
+  # Docker image registry
+  imageRegistry: docker.io
+  
+  # Image pull secrets for private registries
+  imagePullSecrets: []
+  #   - name: regcred
+  
+  # Common labels applied to all resources
+  labels: {}
+  
+  # Common annotations
+  annotations: {}
+
+# Proxy service configuration
+proxy:
+  # Enable/disable proxy deployment
+  enabled: true
+  
+  # Number of proxy replicas
+  replicaCount: 2
+  
+  image:
+    repository: eggybyte/yao-oracle-proxy
+    tag: "latest"
+    pullPolicy: Always
+  
+  # Log level (debug, info, warn, error)
+  logLevel: info
+  
+  # Service discovery configuration
+  discoveryInterval: 10  # Interval in seconds to refresh node list from Kubernetes API
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8080
+    grpcPort: 8080      # Business gRPC port (standard: 8080)
+    healthPort: 9090    # Health check HTTP port (standard: 9090)
+    metricsPort: 9100   # Prometheus metrics port (standard: 9100)
+    annotations: {}
+  
+  # Resource limits and requests
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+  
+  # Autoscaling configuration
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  # Container security context
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  
+  # Liveness probe - HTTP health check on dedicated health port
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  # Readiness probe - HTTP readiness check on dedicated health port
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Node selector for pod assignment
+  nodeSelector: {}
+  
+  # Tolerations for pod assignment
+  tolerations: []
+  
+  # Affinity rules
+  affinity: {}
+  
+  # Environment variables
+  env: []
+  
+  # Prometheus monitoring
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+
+# Cache Node configuration
+node:
+  enabled: true
+  
+  # StatefulSet replicas (horizontally scalable)
+  replicaCount: 3
+  
+  image:
+    repository: eggybyte/yao-oracle-node
+    tag: "latest"
+    pullPolicy: Always
+  
+  # Log level (debug, info, warn, error)
+  logLevel: info
+  
+  # Cache node resource limits
+  maxMemoryMB: 1024
+  maxKeys: 1000000
+  evictionPolicy: LRU  # Eviction policy: LRU, LFU, FIFO
+  
+  # Headless service for StatefulSet
+  service:
+    type: ClusterIP
+    clusterIP: None
+    port: 8080
+    grpcPort: 8080      # Business gRPC port (standard: 8080)
+    healthPort: 9090    # Health check HTTP port (standard: 9090)
+    metricsPort: 9100   # Prometheus metrics port (standard: 9100)
+  
+  # Persistent volume for cache data (optional)
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+  
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  
+  # Liveness probe - HTTP health check on dedicated health port
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  # Readiness probe - HTTP readiness check on dedicated health port
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+  
+  # StatefulSet update strategy
+  updateStrategy:
+    type: RollingUpdate
+  
+  # Node selector for pod assignment
+  nodeSelector: {}
+  
+  # Tolerations for pod assignment
+  tolerations: []
+  
+  # Affinity rules
+  affinity: {}
+  
+  # Environment variables
+  env: []
+
+# Dashboard service configuration
+dashboard:
+  enabled: true
+  
+  replicaCount: 1
+  
+  image:
+    repository: eggybyte/yao-oracle-dashboard
+    tag: "latest"
+    pullPolicy: Always
+  
+  # Log level (debug, info, warn, error)
+  logLevel: info
+  
+  service:
+    type: ClusterIP
+    port: 8080
+    httpPort: 8080      # Business HTTP port (standard: 8080)
+    healthPort: 9090    # Health check HTTP port (standard: 9090)
+    metricsPort: 9100   # Prometheus metrics port (standard: 9100)
+  
+  # Ingress configuration for external access
+  ingress:
+    enabled: false
+    className: nginx
+    annotations:
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: yao-oracle-dashboard.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+    #  - secretName: yao-oracle-dashboard-tls
+    #    hosts:
+    #      - yao-oracle-dashboard.example.com
+  
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "200m"
+  
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  
+  # Liveness probe - HTTP health check on dedicated health port
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  # Readiness probe - HTTP readiness check on dedicated health port
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: health        # Named port: health (9090)
+      scheme: HTTP
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 3
+  
+  # Node selector for pod assignment
+  nodeSelector: {}
+  
+  # Tolerations for pod assignment
+  tolerations: []
+  
+  # Affinity rules
+  affinity: {}
+  
+  # Environment variables
+  env: []
+  
+  # Metrics configuration
+  metrics:
+    enabled: false
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+
+# Configuration management
+config:
+  # Enable ConfigMap for non-sensitive configuration (optional)
+  # If false, only Secret will be created
+  configMapEnabled: false
+  
+  # Business namespaces with API keys
+  # Each namespace represents an isolated business space with:
+  # - Independent API key authentication
+  # - Isolated cache storage (cannot access other namespaces)
+  # - Separate metrics and monitoring
+  namespaces:
+    - name: game-app
+      apikey: "change-me-game-secret-key"
+      description: "Gaming application namespace"
+      # Optional: namespace-specific settings
+      # maxMemoryMB: 512
+      # maxKeys: 100000
+      # defaultTTL: 3600
+      
+    - name: ads-app
+      apikey: "change-me-ads-secret-key"
+      description: "Advertisement service namespace"
+      # maxMemoryMB: 256
+      # maxKeys: 50000
+      # defaultTTL: 1800
+      
+    - name: analytics-app
+      apikey: "change-me-analytics-secret-key"
+      description: "Analytics service namespace"
+      # maxMemoryMB: 1024
+      # maxKeys: 200000
+      # defaultTTL: 7200
+  
+  # Dashboard configuration
+  dashboard:
+    # Dashboard admin password (required for access)
+    password: "change-me-admin-password"
+    
+    # JWT secret for token signing
+    jwtSecret: "change-me-jwt-secret-key-at-least-32-characters-long"
+    
+    # Dashboard UI refresh interval in seconds
+    refreshInterval: 5
+    
+    # Enable authentication for dashboard
+    authEnabled: true
+    
+    # Session timeout in minutes
+    sessionTimeout: 30
+    
+    # Display settings
+    display:
+      # Show detailed node statistics
+      showNodeDetails: true
+      # Show namespace resource usage
+      showNamespaceStats: true
+      # Show connection statistics
+      showConnectionStats: true
+      # Maximum number of recent operations to display
+      maxRecentOperations: 100
+  
+  # Node addresses for consistent hashing
+  # This will be auto-populated from StatefulSet service discovery
+  # You can also manually specify node addresses if needed
+  nodes: []
+  # - address: "yao-oracle-node-0.yao-oracle-node:8080"
+  # - address: "yao-oracle-node-1.yao-oracle-node:8080"
+  # - address: "yao-oracle-node-2.yao-oracle-node:8080"
+  
+  # Proxy addresses (for dashboard to connect to proxy)
+  # Auto-populated if empty
+  proxyAddresses: []
+  # - "yao-oracle-proxy:8080"
+
+# ServiceAccount configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Network policies for security
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Pod priority class
+priorityClassName: ""
+
+# Name override
+nameOverride: ""
+fullnameOverride: ""
+

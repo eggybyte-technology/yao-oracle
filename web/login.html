@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Yao-Oracle Dashboard</title>
+    <link rel="icon" type="image/png" href="https://yao-verse.eggybyte.com/favicon.png">
+    <link rel="stylesheet" href="/css/common.css">
+    <link rel="stylesheet" href="/css/login.css">
+</head>
+
+<body>
+    <div class="login-wrapper">
+        <div class="login-container">
+            <div class="login-header">
+                <img src="https://yao-verse.eggybyte.com/favicon.png" alt="Yao-Oracle Logo" class="login-logo">
+                <h1 class="login-title">Yao-Oracle</h1>
+                <p class="login-subtitle">Distributed KV Cache Dashboard</p>
+            </div>
+
+            <div id="test-mode-banner" class="test-mode-banner" style="display: none;">
+                <div class="test-mode-icon">🔑</div>
+                <div class="test-mode-content">
+                    <div class="test-mode-title">Test Mode Active</div>
+                    <div class="test-mode-text">Default Password: <strong id="default-password-display"></strong></div>
+                </div>
+            </div>
+
+            <div id="error-message" class="error-message"></div>
+
+            <form id="login-form" class="login-form">
+                <div class="form-group">
+                    <label for="password" class="form-label">Password</label>
+                    <input type="password" id="password" name="password" class="form-input"
+                        placeholder="Enter your password" required autocomplete="current-password">
+                </div>
+
+                <button type="submit" id="login-button" class="login-button">
+                    <span id="button-text">Sign In</span>
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <p>&copy; 2025 Yao-Oracle. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/config.js"></script>
+    <script src="/js/auth.js"></script>
+</body>
+
+</html>

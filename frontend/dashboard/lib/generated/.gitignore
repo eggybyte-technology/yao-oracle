@@ -1,0 +1,5 @@
+# Generated gRPC code
+*.pb.dart
+*.pbgrpc.dart
+*.pbenum.dart
+*.pbjson.dart

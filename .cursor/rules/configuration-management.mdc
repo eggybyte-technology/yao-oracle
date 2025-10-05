@@ -1,0 +1,683 @@
+---
+alwaysApply: true
+---
+
+# Configuration Management Strategy
+
+## Configuration Loading Hierarchy
+
+Yao-Oracle uses a **two-tier configuration system**:
+
+1. **Environment Variables** (Infrastructure/Basic Config)
+   - Read at service startup from container environment
+   - Used for: Port bindings, log levels, service discovery endpoints, Kubernetes resource names
+   - Examples: `GRPC_PORT`, `HTTP_PORT`, `LOG_LEVEL`, `NAMESPACE`, `SECRET_NAME`, `CONFIGMAP_NAME`
+
+2. **Kubernetes API Direct Access** (Business/Dynamic Config)
+   - **NO file mounting** - services read directly from Kubernetes API
+   - Services use `InClusterConfig()` to connect to Kubernetes API
+   - Read ConfigMap/Secret data via Kubernetes client
+   - Contains: Namespace definitions, API keys, dashboard credentials
+   - **Dynamically reloadable** without restart via Kubernetes Informer
+
+## Configuration Sources
+
+### Environment Variables (Static)
+
+**Common Environment Variables (All Services):**
+- `NAMESPACE`: Kubernetes namespace (auto-injected)
+- `LOG_LEVEL`: Logging level (debug, info, warn, error)
+- `CONFIGMAP_NAME`: ConfigMap name to watch (e.g., `yao-oracle-config`)
+- `SECRET_NAME`: Secret name to watch (e.g., `yao-oracle-secret`)
+
+**Proxy Service Environment Variables:**
+- `GRPC_PORT`: gRPC server listen port (default: 8080)
+- `HTTP_PORT`: Management interface port (default: 9090)
+- `METRICS_PORT`: Prometheus metrics port (default: 9100)
+- `PROXY_HEADLESS_SERVICE`: Headless service DNS for Dashboard discovery
+- `NODE_HEADLESS_SERVICE`: Node headless service DNS for discovery
+- `DISCOVERY_MODE`: Discovery mode (`k8s` for Kubernetes API)
+- `DISCOVERY_INTERVAL`: Cluster discovery refresh interval in seconds (default: 10)
+
+**Cache Node Service Environment Variables:**
+- `GRPC_PORT`: gRPC server listen port (default: 7070)
+- `MAX_MEMORY_MB`: Maximum memory limit in MB (default: 1024)
+- `MAX_KEYS`: Maximum number of keys (default: 1000000)
+- `EVICTION_POLICY`: Eviction policy (default: LRU)
+- `METRICS_PORT`: Prometheus metrics port (default: 9101)
+
+**Dashboard Service Environment Variables:**
+- `HTTP_PORT`: Web server port (default: 8081)
+- `METRICS_PORT`: Prometheus metrics port (default: 9102)
+- `PROXY_SERVICE_DNS`: Proxy headless service DNS for discovery
+- `NODE_SERVICE_DNS`: Node headless service DNS for discovery
+- `DISCOVERY_MODE`: Discovery mode (`k8s` for Kubernetes API)
+- `REFRESH_INTERVAL`: Dashboard refresh interval in seconds (default: 5)
+
+**Loading Pattern:**
+```go
+// Load with defaults
+port := getEnv("GRPC_PORT", "8080")
+logLevel := getEnv("LOG_LEVEL", "info")
+namespace := getEnv("NAMESPACE", "default")
+configMapName := getEnv("CONFIGMAP_NAME", "yao-oracle-config")
+secretName := getEnv("SECRET_NAME", "yao-oracle-secret")
+```
+
+### ConfigMap (Dynamic Business Config - Optional)
+
+Managed by Helm chart at [helm/yao-oracle/templates/configmap.yaml](mdc:helm/yao-oracle/templates/configmap.yaml)
+
+**ConfigMap Structure (Non-Sensitive Business Config):**
+- Namespace list without API keys
+- Business settings: memory limits, TTL defaults, rate limits
+- Service-specific configuration: refresh intervals, timeouts
+
+**Example Structure:**
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yao-oracle-config
+  namespace: yao-system
+data:
+  config.json: |
+    {
+      "proxy": {
+        "namespaces": [
+          {"name": "game-app", "description": "Gaming application", "maxMemoryMB": 512, "defaultTTL": 60, "rateLimitQPS": 100}
+        ]
+      },
+      "dashboard": {
+        "refreshInterval": 5,
+        "theme": "dark"
+      }
+    }
+```
+
+### Secret (Sensitive Data - Required)
+
+Managed by Helm chart at [helm/yao-oracle/templates/secret.yaml](mdc:helm/yao-oracle/templates/secret.yaml)
+
+**Secret Must Contain:**
+- Complete configuration with sensitive data in single key: `config-with-secrets.json`
+- Includes: namespaces with API keys, dashboard password, JWT secret
+
+**Example Structure:**
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: yao-oracle-secret
+  namespace: yao-system
+type: Opaque
+stringData:
+  config-with-secrets.json: |
+    {
+      "proxy": {
+        "namespaces": [
+          {"name": "game-app", "apikey": "game-secret-123", "description": "Gaming application", "maxMemoryMB": 512, "defaultTTL": 60, "rateLimitQPS": 100},
+          {"name": "ads-service", "apikey": "ads-secret-456", "description": "Ads service", "maxMemoryMB": 256, "defaultTTL": 120, "rateLimitQPS": 50}
+        ]
+      },
+      "dashboard": {
+        "password": "super-secure-password",
+        "jwtSecret": "jwt-signing-key",
+        "refreshInterval": 5
+      }
+    }
+```
+
+**How Services Read Secret:**
+```go
+// Connect to Kubernetes API
+cfg, _ := rest.InClusterConfig()
+clientset, _ := kubernetes.NewForConfig(cfg)
+
+// Read Secret
+secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
+if err != nil {
+    return err
+}
+
+// Parse JSON from Secret data
+configJSON := secret.Data["config-with-secrets.json"]
+var config Config
+json.Unmarshal(configJSON, &config)
+```
+
+## Service-Specific Configuration Loading
+
+### Proxy Service
+
+**Configuration Needs:**
+- Environment variables for infrastructure (ports, log level, etc.)
+- Direct Kubernetes API access to Secret for namespaces and API keys
+- **Hot reload enabled** via Kubernetes Informer (no file watching)
+
+**Loading Steps:**
+1. Load env vars (ports, log level, namespace, secret name)
+2. Connect to Kubernetes API using `InClusterConfig()`
+3. Read Secret data directly from Kubernetes API
+4. Parse JSON config from Secret
+5. Validate configuration
+6. Start Kubernetes Informer to watch Secret changes
+7. Start server with loaded config
+
+**No File System Involved:**
+- ❌ No `CONFIG_PATH` environment variable
+- ❌ No Volume/VolumeMount in Deployment
+- ✅ Only Kubernetes API calls
+
+### Cache Node Service
+
+**Configuration Needs:**
+- Environment variables ONLY (no Kubernetes API access needed)
+- No ConfigMap/Secret dependency (receives namespace from Proxy requests)
+- Fully stateless design
+
+**Required Env Vars:**
+- `GRPC_PORT`, `MAX_MEMORY_MB`, `MAX_KEYS`, `EVICTION_POLICY`, `LOG_LEVEL`
+
+**Key Points:**
+- Node service does NOT connect to Kubernetes API
+- Node service does NOT read any config files
+- Node service does NOT have ServiceAccount/RBAC
+
+### Dashboard Service
+
+**Configuration Needs:**
+- Environment variables for infrastructure (ports, log level, etc.)
+- Direct Kubernetes API access to Secret for password and namespace data
+- **Hot reload enabled** via Kubernetes Informer (no file watching)
+
+**Loading Steps:**
+1. Load env vars (ports, log level, namespace, secret name, service DNS)
+2. Connect to Kubernetes API using `InClusterConfig()`
+3. Read Secret data directly from Kubernetes API
+4. Parse JSON config from Secret (password, namespaces, JWT secret)
+5. Validate configuration
+6. Start Kubernetes Informer to watch Secret changes
+7. Start HTTP server with auth middleware
+
+**No File System Involved:**
+- ❌ No `CONFIG_PATH` environment variable
+- ❌ No Volume/VolumeMount in Deployment
+- ✅ Only Kubernetes API calls
+
+## core/config Package Structure
+
+**Required Files:**
+```
+core/config/
+├── config.go          # Common config structures (Namespace, ProxyConfig, DashboardConfig)
+├── k8s_loader.go      # Load config directly from Kubernetes API (no file I/O)
+├── informer.go        # Kubernetes Informer for hot reload
+├── validator.go       # Configuration validation logic
+└── parser.go          # JSON parsing utilities
+```
+
+**Removed Files (No Longer Needed):**
+- ❌ `loader.go` - File-based loading (replaced by `k8s_loader.go`)
+- ❌ `watcher.go` - fsnotify file watching (replaced by `informer.go`)
+- ❌ `proxy_config.go` - Merged into `config.go`
+- ❌ `node_config.go` - Merged into `config.go`
+- ❌ `dashboard_config.go` - Merged into `config.go`
+
+### Key Interfaces Required
+
+```go
+// K8sConfigLoader loads configuration directly from Kubernetes API
+type K8sConfigLoader interface {
+    // LoadProxyConfig reads Secret from Kubernetes API and returns ProxyConfig
+    LoadProxyConfig(ctx context.Context, namespace, secretName string) (*ProxyConfig, error)
+    
+    // LoadDashboardConfig reads Secret from Kubernetes API and returns DashboardConfig
+    LoadDashboardConfig(ctx context.Context, namespace, secretName string) (*DashboardConfig, error)
+}
+
+// DynamicConfigWatcher watches for configuration changes using Kubernetes Informer
+type DynamicConfigWatcher interface {
+    // Start begins watching ConfigMap/Secret for changes
+    Start(ctx context.Context, onChange func(kind string, data map[string]string)) error
+    
+    // Stop gracefully shuts down the watcher
+    Stop()
+}
+```
+
+### Implementation Example (k8s_loader.go)
+
+```go
+package config
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
+)
+
+type K8sConfigLoaderImpl struct {
+    clientset *kubernetes.Clientset
+}
+
+func NewK8sConfigLoader() (*K8sConfigLoaderImpl, error) {
+    cfg, err := rest.InClusterConfig()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+    }
+    
+    clientset, err := kubernetes.NewForConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create clientset: %w", err)
+    }
+    
+    return &K8sConfigLoaderImpl{clientset: clientset}, nil
+}
+
+func (l *K8sConfigLoaderImpl) LoadProxyConfig(ctx context.Context, namespace, secretName string) (*ProxyConfig, error) {
+    // Read Secret from Kubernetes API
+    secret, err := l.clientset.CoreV1().Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
+    if err != nil {
+        return nil, fmt.Errorf("failed to get secret: %w", err)
+    }
+    
+    // Parse config-with-secrets.json
+    configJSON, ok := secret.Data["config-with-secrets.json"]
+    if !ok {
+        return nil, fmt.Errorf("config-with-secrets.json not found in secret")
+    }
+    
+    var fullConfig struct {
+        Proxy *ProxyConfig `json:"proxy"`
+    }
+    
+    if err := json.Unmarshal(configJSON, &fullConfig); err != nil {
+        return nil, fmt.Errorf("failed to parse config: %w", err)
+    }
+    
+    if fullConfig.Proxy == nil {
+        return nil, fmt.Errorf("proxy config not found in secret")
+    }
+    
+    return fullConfig.Proxy, nil
+}
+
+func (l *K8sConfigLoaderImpl) LoadDashboardConfig(ctx context.Context, namespace, secretName string) (*DashboardConfig, error) {
+    // Similar to LoadProxyConfig but for Dashboard
+    // ...
+}
+```
+
+## ConfigMap Watching Strategy
+
+### Kubernetes Informer Approach (Recommended)
+
+**Why Kubernetes Informer over fsnotify:**
+- ✅ No delay (~60s) waiting for Kubernetes to update mounted files
+- ✅ Instant notification when ConfigMap/Secret is updated
+- ✅ No symlink complexity
+- ✅ More reliable and cloud-native approach
+- ✅ Direct connection to Kubernetes API
+
+**Implementation Requirements:**
+- Use `client-go` Kubernetes client library
+- Use `InClusterConfig()` to connect to Kubernetes API
+- Setup SharedInformerFactory with namespace filter
+- Watch both ConfigMap and Secret resources
+- Call callback on Update events only (ignore Add/Delete)
+- Validate config before applying
+
+**Implementation Example (core/config/informer.go):**
+```go
+package config
+
+import (
+    "context"
+    "fmt"
+    "time"
+    
+    corev1 "k8s.io/api/core/v1"
+    "k8s.io/client-go/informers"
+    "k8s.io/client-go/kubernetes"
+    "k8s.io/client-go/rest"
+    "k8s.io/client-go/tools/cache"
+)
+
+type DynamicConfigWatcher struct {
+    Namespace     string
+    ConfigMapName string
+    SecretName    string
+    clientset     *kubernetes.Clientset
+    factory       informers.SharedInformerFactory
+    stopChan      chan struct{}
+}
+
+func NewDynamicConfigWatcher(namespace, configMapName, secretName string) (*DynamicConfigWatcher, error) {
+    cfg, err := rest.InClusterConfig()
+    if err != nil {
+        return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+    }
+    
+    clientset, err := kubernetes.NewForConfig(cfg)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create clientset: %w", err)
+    }
+    
+    return &DynamicConfigWatcher{
+        Namespace:     namespace,
+        ConfigMapName: configMapName,
+        SecretName:    secretName,
+        clientset:     clientset,
+        stopChan:      make(chan struct{}),
+    }, nil
+}
+
+func (w *DynamicConfigWatcher) Start(ctx context.Context, onChange func(kind string, data map[string]string)) error {
+    w.factory = informers.NewSharedInformerFactoryWithOptions(
+        w.clientset,
+        time.Minute,
+        informers.WithNamespace(w.Namespace),
+    )
+    
+    // Watch ConfigMap
+    cmInformer := w.factory.Core().V1().ConfigMaps().Informer()
+    cmInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+        UpdateFunc: func(oldObj, newObj interface{}) {
+            cm := newObj.(*corev1.ConfigMap)
+            if cm.Name == w.ConfigMapName {
+                fmt.Printf("🔄 ConfigMap %s updated, reloading...\n", w.ConfigMapName)
+                onChange("ConfigMap", cm.Data)
+            }
+        },
+    })
+    
+    // Watch Secret
+    secInformer := w.factory.Core().V1().Secrets().Informer()
+    secInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+        UpdateFunc: func(oldObj, newObj interface{}) {
+            sec := newObj.(*corev1.Secret)
+            if sec.Name == w.SecretName {
+                fmt.Printf("🔑 Secret %s updated, reloading...\n", w.SecretName)
+                data := make(map[string]string)
+                for k, v := range sec.Data {
+                    data[k] = string(v)
+                }
+                onChange("Secret", data)
+            }
+        },
+    })
+    
+    // Start informers
+    w.factory.Start(w.stopChan)
+    
+    // Wait for cache sync
+    synced := w.factory.WaitForCacheSync(w.stopChan)
+    for typ, ok := range synced {
+        if !ok {
+            return fmt.Errorf("failed to sync cache for %v", typ)
+        }
+    }
+    
+    fmt.Println("✅ Kubernetes Informer started, watching for config changes...")
+    return nil
+}
+
+func (w *DynamicConfigWatcher) Stop() {
+    close(w.stopChan)
+    fmt.Println("🛑 Stopped Kubernetes Informer")
+}
+```
+
+### Hot Reload Behavior
+
+**When ConfigMap/Secret is updated:**
+1. Administrator runs `kubectl apply` or `helm upgrade`
+2. Kubernetes API server updates the resource
+3. **Informer immediately detects the change** (no file system delay)
+4. `UpdateFunc` callback is triggered
+5. Service extracts new config data
+6. **Validate** new config before applying
+7. Service applies new config without restart:
+   - **Proxy**: Updates namespace list and API keys in memory
+   - **Dashboard**: Updates password and namespace info (invalidates old tokens)
+
+**Concurrency Safety Pattern:**
+```go
+var (
+    mu   sync.RWMutex
+    cfg  *Config
+)
+
+func applyNewConfig(newCfg *Config) error {
+    // Validate first
+    if err := ValidateConfig(newCfg); err != nil {
+        return fmt.Errorf("invalid config: %w", err)
+    }
+    
+    // Apply atomically
+    mu.Lock()
+    defer mu.Unlock()
+    cfg = newCfg
+    
+    fmt.Printf("✅ Config updated at %s\n", time.Now().Format(time.RFC3339))
+    return nil
+}
+
+func GetConfig() *Config {
+    mu.RLock()
+    defer mu.RUnlock()
+    return cfg
+}
+```
+
+## Configuration Validation
+
+**All configuration loading MUST include validation:**
+
+**Required Validation Rules:**
+- At least one namespace must be defined
+- Namespace names must be unique and non-empty
+- API keys must be non-empty for each namespace
+- Dashboard password must be non-empty
+- Memory/key limits must be positive integers
+
+**Validation Pattern:**
+```go
+func ValidateProxyConfig(cfg *ProxyConfig) error {
+    // Check for empty namespace list
+    // Check for duplicate namespace names
+    // Check for missing API keys
+    // Check for invalid limits
+    return nil // or error
+}
+```
+
+## Best Practices
+
+### DO:
+- ✅ Use environment variables for infrastructure config (ports, paths, limits)
+- ✅ Use ConfigMap/Secret for business config (namespaces, credentials)
+- ✅ Use **Kubernetes Informer** for hot reload (not fsnotify)
+- ✅ Validate all configuration before applying
+- ✅ Log configuration changes with timestamps for audit trail
+- ✅ Use Secret for sensitive data (API keys, passwords, JWT secrets)
+- ✅ Use RWMutex to protect config during hot reload
+- ✅ Setup proper RBAC for services to access ConfigMap/Secret
+- ✅ Use `InClusterConfig()` for Kubernetes API access
+- ✅ Wait for cache sync before using Informer data
+
+### DON'T:
+- ❌ Hard-code configuration values in code
+- ❌ Mix infrastructure config with business config
+- ❌ Use fsnotify for ConfigMap watching (use Informer instead)
+- ❌ Ignore configuration validation errors
+- ❌ Store secrets in ConfigMap (use Secret instead)
+- ❌ Require service restart for business config changes
+- ❌ Apply config without validation
+- ❌ Forget to setup ServiceAccount and RBAC for Informer access
+
+## Helm Integration
+
+### values.yaml Structure
+
+**Split configuration into two layers:**
+
+```yaml
+# Layer 1: Infrastructure config (env vars)
+proxy:
+  service:
+    grpcPort: 8080
+  logLevel: "info"
+
+# Layer 2: Business config (ConfigMap/Secret)
+config:
+  namespaces:
+    - name: game-app
+      apikey: "change-me-game-secret"
+      description: "Gaming application"
+  dashboard:
+    password: "change-me-admin-password"
+    refreshInterval: 5
+```
+
+### Deployment Template Requirements
+
+**ServiceAccount (Required for Proxy and Dashboard):**
+```yaml
+spec:
+  serviceAccountName: {{ include "yao-oracle.serviceAccountName" . }}
+```
+
+**Environment Variables Section:**
+- Inject infrastructure config from `values.yaml`
+- Include Kubernetes resource names (namespace, secret name, configmap name)
+- Include pod metadata (name, namespace, IP)
+- **NO `CONFIG_PATH` variable** (no file mounting)
+
+**Example Environment Variables:**
+```yaml
+env:
+- name: NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: POD_IP
+  valueFrom:
+    fieldRef:
+      fieldPath: status.podIP
+- name: LOG_LEVEL
+  value: {{ .Values.logLevel | quote }}
+- name: SECRET_NAME
+  value: {{ include "yao-oracle.fullname" . }}-secret
+- name: CONFIGMAP_NAME
+  value: {{ include "yao-oracle.fullname" . }}-config
+# Service-specific env vars...
+```
+
+**NO Volume/VolumeMount:**
+- ❌ Do NOT mount ConfigMap as volumes
+- ❌ Do NOT mount Secret as volumes
+- ❌ Do NOT use `/etc/yao-oracle` mount path
+- ✅ Services read config directly from Kubernetes API using clientset
+
+## RBAC Requirements for Kubernetes Informer
+
+**Services using Informer (Proxy and Dashboard) require RBAC permissions:**
+
+**ServiceAccount Required:**
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: yao-oracle
+  namespace: yao-system
+```
+
+**Role Required:**
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: yao-oracle-config-reader
+  namespace: yao-system
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch"]  # For service discovery
+```
+
+**RoleBinding Required:**
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: yao-oracle-config-reader
+  namespace: yao-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: yao-oracle-config-reader
+subjects:
+- kind: ServiceAccount
+  name: yao-oracle
+  namespace: yao-system
+```
+
+**Deployment must reference ServiceAccount:**
+```yaml
+spec:
+  template:
+    spec:
+      serviceAccountName: yao-oracle
+```
+
+## Testing Configuration
+
+**Required Tests:**
+- Load config from valid Secret via Kubernetes API
+- Handle missing/malformed configuration
+- Handle Kubernetes API errors (secret not found, permission denied)
+- Validate config structure (namespaces, API keys, passwords)
+- Test Informer hot reload mechanism
+- Test concurrent access safety (RWMutex with `go test -race`)
+- Test RBAC permissions (should fail without proper ServiceAccount/Role)
+
+## Best Practices
+
+### DO:
+- ✅ Use environment variables for infrastructure config (ports, limits, intervals, resource names)
+- ✅ Use Secret for all sensitive data (API keys, passwords, JWT secrets)
+- ✅ Use **Kubernetes API direct access** to read config (no file mounting)
+- ✅ Use **Kubernetes Informer** for config hot reload
+- ✅ Use **Kubernetes Endpoints API** for service discovery
+- ✅ Setup proper RBAC (ServiceAccount + Role + RoleBinding) for Proxy and Dashboard
+- ✅ Implement config validation before applying
+- ✅ Use RWMutex to protect config during hot reload
+- ✅ Log config changes with timestamps for audit trail
+- ✅ Wait for Informer cache sync before using data
+- ✅ Handle Kubernetes API errors gracefully (retry with backoff)
+
+### DON'T:
+- ❌ Mount ConfigMap/Secret as files (use direct Kubernetes API instead)
+- ❌ Use `CONFIG_PATH` environment variable (no file mounting)
+- ❌ Use fsnotify or file watchers (use Kubernetes Informer instead)
+- ❌ Use DNS for service discovery (use Endpoints API instead)
+- ❌ Skip config validation on load
+- ❌ Forget to setup ServiceAccount and RBAC for services that need Kubernetes API access
+- ❌ Commit production secrets to Git
+- ❌ Use default passwords in production
+- ❌ Restart services for business config changes (use hot reload via Informer)
+- ❌ Apply config without validation
+- ❌ Give Node service Kubernetes API access (it doesn't need it)

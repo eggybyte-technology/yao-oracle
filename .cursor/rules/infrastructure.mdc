@@ -1,0 +1,651 @@
+---
+globs: scripts/*,Makefile,*.sh,build/*.Dockerfile,Dockerfile,docker-compose.yml,helm/**/*,Chart.yaml,values.yaml
+description: Infrastructure, build automation, and deployment standards
+---
+
+# Infrastructure & Deployment Standards
+
+This rule covers all infrastructure-related aspects: build scripts, Docker images, and Helm deployment.
+
+## 1. Scripts & Makefile Standards
+
+### Directory Structure
+
+```
+scripts/
+├── common.sh            # Shared logging functions
+├── build.sh             # Build all services
+├── test.sh              # Run tests
+├── lint.sh              # Run linters
+├── proto-generate.sh    # Generate proto code
+├── docker-build.sh      # Build Docker images
+└── helm-*.sh            # Helm operations
+```
+
+### Unified Logging Format
+
+All scripts **must** use consistent logging via `scripts/common.sh`:
+
+**Required Logging Functions:**
+- `log_info(msg)` - Informational messages (blue)
+- `log_success(msg)` - Success messages (green)
+- `log_warn(msg)` - Warning messages (yellow)
+- `log_error(msg)` - Error messages (red, stderr)
+- `log_step(n, msg)` - Step progress (cyan)
+- `check_command(cmd, errMsg)` - Check if command exists
+
+**Log Format:**
+```
+[LEVEL] YYYY-MM-DD HH:MM:SS - message
+```
+
+### Script Template Requirements
+
+Every script must follow this structure:
+
+**Header Section:**
+```bash
+#!/bin/bash
+# scripts/example.sh
+# Brief description
+#
+# Usage: ./scripts/example.sh [options]
+# Options:
+#   -v, --verbose    Enable verbose output
+#   -h, --help       Display this help
+```
+
+**Error Handling:**
+```bash
+set -euo pipefail  # Exit on error, undefined vars, pipe failures
+```
+
+**Source Common Functions:**
+```bash
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common.sh"
+```
+
+**Function Organization:**
+1. `parse_args()` - Parse command-line arguments
+2. `show_help()` - Display usage information
+3. `main()` - Entry point with step-by-step logic
+4. Execute: `main "$@"`
+
+### Makefile as Unified Interface
+
+The root `Makefile` is the **single entry point** for all operations.
+
+**Requirements:**
+- Every target must have a `##` comment for help
+- Use `@` prefix to suppress echo (scripts handle logging)
+- Never echo from Makefile - let scripts do all output
+- All real work happens in scripts
+
+**Standard Targets:**
+```makefile
+help          ## Display this help message
+build         ## Build all services
+test          ## Run all tests with coverage
+proto-generate ## Generate Go code from proto files
+docker-build  ## Build Docker images (local)
+docker-push   ## Build and push Docker images
+helm-install  ## Install Helm chart
+helm-upgrade  ## Upgrade Helm chart
+clean         ## Clean build artifacts
+```
+
+---
+
+## 2. Docker Build Standards
+
+### Multi-Stage Dockerfile Template
+
+Each service Dockerfile uses **multi-stage builds** for minimal image size.
+
+**Required Stages:**
+
+**Stage 1: Build Stage**
+- Base: `golang:1.21-alpine`
+- Install build dependencies (git, make, protobuf if needed)
+- Copy `go.mod`, `go.sum` first (better caching)
+- Run `go mod download`
+- Copy source code
+- Generate proto code if not present
+- Build static binary with flags: `CGO_ENABLED=0 -ldflags="-w -s"`
+
+**Stage 2: Runtime Stage**
+- Base: `alpine:3.22.1`
+- Install CA certificates and tzdata
+- Create non-root user (uid 1000)
+- Copy binary from builder
+- Set ownership to non-root user
+- Switch to non-root user
+- Expose service port
+- Add HEALTHCHECK
+- Set ENTRYPOINT
+
+### .dockerignore
+
+**Must Include:**
+```
+.git/
+pb/              # Generated code
+bin/             # Compiled binaries
+*.test
+.vscode/
+.idea/
+docs/
+*.md (except README.md)
+helm/
+tmp/
+.env
+*_test.go
+testdata/
+```
+
+### Multi-Platform Build Requirements
+
+**Build Script Requirements:**
+- Use Docker buildx for multi-platform builds
+- Default platforms: `linux/amd64,linux/arm64`
+- Support `--push` flag to push to registry
+- Support `--version` flag for tagging
+- Support `--service` flag to build single service
+- Use registry cache for faster builds
+- For local builds: single platform with `--load`
+- For production: multi-platform with `--push`
+
+**Build Commands:**
+```bash
+# Local testing (single platform, faster)
+make docker-build
+
+# Build and push multi-platform
+make docker-push VERSION=v1.0.0
+
+# Build single service
+bash scripts/docker-build.sh --service proxy
+```
+
+**Best Practices:**
+- ✅ Multi-stage builds for smaller images
+- ✅ Non-root user (uid 1000)
+- ✅ Static binaries (`CGO_ENABLED=0`)
+- ✅ Strip debug info (`-ldflags="-w -s"`)
+- ✅ Layer caching optimization
+- ✅ Registry cache for faster builds
+- ✅ Health checks in Dockerfile
+- ✅ Multi-platform support (amd64, arm64)
+
+---
+
+## 3. Helm Chart Standards
+
+### Chart Structure
+
+```
+helm/yao-oracle/
+├── Chart.yaml              # Chart metadata
+├── values.yaml             # Default configuration
+├── values-dev.yaml         # Development overrides
+├── values-prod.yaml        # Production overrides
+├── templates/
+│   ├── NOTES.txt           # Post-install instructions
+│   ├── _helpers.tpl        # Template helpers
+│   ├── configmap.yaml      # Business configuration
+│   ├── secret.yaml         # Sensitive data
+│   ├── serviceaccount.yaml
+│   ├── rbac.yaml
+│   ├── proxy/
+│   │   ├── deployment.yaml
+│   │   ├── service.yaml
+│   │   ├── service-headless.yaml
+│   │   ├── hpa.yaml
+│   │   └── servicemonitor.yaml
+│   ├── node/
+│   │   ├── statefulset.yaml
+│   │   ├── service.yaml
+│   │   └── servicemonitor.yaml
+│   └── dashboard/
+│       ├── deployment.yaml
+│       ├── service.yaml
+│       ├── ingress.yaml
+│       └── servicemonitor.yaml
+└── charts/                 # Subcharts
+```
+
+### Chart.yaml Requirements
+
+**Required Fields:**
+- `apiVersion: v2`
+- `name`, `description`, `type`
+- `version` (chart version) and `appVersion` (app version)
+- `keywords` for searchability
+- `home` URL and `maintainers`
+
+### values.yaml Structure
+
+**Must Include:**
+
+**Global Section:**
+- `imageRegistry`, `imagePullSecrets`
+
+**Per-Service Section (proxy, node, dashboard):**
+- `enabled`, `replicaCount`
+- `image`: repository, tag, pullPolicy
+- `service`: type, port, annotations
+- `resources`: requests and limits
+- `autoscaling`: enabled, min/max replicas, target CPU
+- `podSecurityContext`: runAsNonRoot, runAsUser
+- `securityContext`: allowPrivilegeEscalation, readOnlyRootFilesystem, capabilities
+
+**Config Section:**
+- `namespaces`: list with name, apikey, description, limits
+- `dashboard`: password, refreshInterval
+
+**Special Requirements:**
+- Proxy needs both ClusterIP service AND headless service
+- Node needs headless service for StatefulSet
+- Node supports `persistence` for StatefulSet volumes
+- Dashboard needs `ingress` configuration
+
+### Template Helpers (_helpers.tpl)
+
+**Required Helper Functions:**
+- `yao-oracle.name` - Chart name
+- `yao-oracle.fullname` - Fully qualified app name
+- `yao-oracle.chart` - Chart name and version
+- `yao-oracle.labels` - Common labels
+- `yao-oracle.selectorLabels` - Selector labels
+- `yao-oracle.proxy.labels` - Proxy-specific labels
+- `yao-oracle.node.labels` - Node-specific labels
+- `yao-oracle.dashboard.labels` - Dashboard-specific labels
+
+### Helm Commands
+
+**Installation:**
+```bash
+helm install yao-oracle ./helm/yao-oracle \
+  --namespace yao-oracle \
+  --create-namespace \
+  --values values-prod.yaml
+```
+
+**Upgrade:**
+```bash
+helm upgrade yao-oracle ./helm/yao-oracle \
+  --namespace yao-oracle \
+  --wait \
+  --timeout 5m
+```
+
+**Validation:**
+```bash
+helm template yao-oracle ./helm/yao-oracle
+helm lint ./helm/yao-oracle
+helm install --dry-run --debug
+```
+
+---
+
+## 4. Configuration Management in Helm
+
+### Two-Tier Configuration Strategy
+
+Yao-Oracle uses a **two-tier configuration system** that integrates with Helm:
+
+**1. Environment Variables** (Infrastructure Config)
+- Defined in `values.yaml` → Injected into Pod `env` section
+- Static configuration: ports, log levels, paths
+- Requires Pod restart to change
+
+**2. ConfigMap/Secret** (Business Config)
+- Defined in `values.yaml` → Rendered to ConfigMap/Secret
+- Dynamic configuration: namespaces, API keys, passwords
+- Hot-reloadable without restart (watched by services)
+
+### ConfigMap Template Requirements
+
+**Template Structure:**
+- Reads from `.Values.config.namespaces`
+- Renders JSON structure with namespace list
+- Excludes API keys (those go in Secret)
+- Includes business settings: memory limits, TTL defaults
+
+### Secret Template Requirements
+
+**Template Structure:**
+- Reads from `.Values.config.namespaces`
+- Creates individual `apikey-{namespace-name}` keys
+- Creates `dashboard-password` key
+- Creates `config-with-secrets.json` with complete config
+- Uses `stringData` for easier templating
+
+### Deployment Template Requirements
+
+**ServiceAccount Reference:**
+```yaml
+spec:
+  serviceAccountName: {{ include "yao-oracle.fullname" . }}
+```
+
+**Environment Variables Section:**
+
+**Common Environment Variables (All Services):**
+```yaml
+- name: NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: POD_NAME
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.name
+- name: POD_IP
+  valueFrom:
+    fieldRef:
+      fieldPath: status.podIP
+- name: LOG_LEVEL
+  value: {{ .Values.logLevel | quote }}
+- name: CONFIGMAP_NAME
+  value: {{ include "yao-oracle.fullname" . }}-config
+- name: SECRET_NAME
+  value: {{ include "yao-oracle.fullname" . }}-secret
+```
+
+**Proxy-Specific Environment Variables:**
+```yaml
+- name: GRPC_PORT
+  value: {{ .Values.proxy.service.grpcPort | quote }}
+- name: HTTP_PORT
+  value: {{ .Values.proxy.service.httpPort | quote }}
+- name: METRICS_PORT
+  value: {{ .Values.proxy.service.metricsPort | quote }}
+- name: NODE_HEADLESS_SERVICE
+  value: {{ include "yao-oracle.fullname" . }}-node-headless.{{ .Release.Namespace }}.svc.cluster.local
+- name: DISCOVERY_MODE
+  value: "k8s"
+- name: DISCOVERY_INTERVAL
+  value: {{ .Values.proxy.discoveryInterval | default 10 | quote }}
+```
+
+**Node-Specific Environment Variables:**
+```yaml
+- name: GRPC_PORT
+  value: {{ .Values.node.service.grpcPort | quote }}
+- name: METRICS_PORT
+  value: {{ .Values.node.service.metricsPort | quote }}
+- name: MAX_MEMORY_MB
+  value: {{ .Values.node.maxMemoryMB | default 1024 | quote }}
+- name: MAX_KEYS
+  value: {{ .Values.node.maxKeys | default 1000000 | quote }}
+- name: EVICTION_POLICY
+  value: {{ .Values.node.evictionPolicy | default "LRU" | quote }}
+```
+
+**Dashboard-Specific Environment Variables:**
+```yaml
+- name: HTTP_PORT
+  value: {{ .Values.dashboard.service.httpPort | quote }}
+- name: METRICS_PORT
+  value: {{ .Values.dashboard.service.metricsPort | quote }}
+- name: PROXY_SERVICE_DNS
+  value: {{ include "yao-oracle.fullname" . }}-proxy-headless.{{ .Release.Namespace }}.svc.cluster.local
+- name: NODE_SERVICE_DNS
+  value: {{ include "yao-oracle.fullname" . }}-node-headless.{{ .Release.Namespace }}.svc.cluster.local
+- name: DISCOVERY_MODE
+  value: "k8s"
+- name: REFRESH_INTERVAL
+  value: {{ .Values.dashboard.refreshInterval | default 5 | quote }}
+```
+
+**NO Volume/VolumeMount Required:**
+```yaml
+# ❌ Do NOT add volumes or volumeMounts
+# ❌ Services read config directly from Kubernetes API
+# ✅ Only ServiceAccount is needed for API access
+```
+
+**Why No File Mounting:**
+- Services use `InClusterConfig()` to connect to Kubernetes API
+- Services read Secret data directly via Kubernetes client
+- Kubernetes Informer watches for changes via API (not file system)
+- No delay waiting for Kubernetes to propagate files to Pods
+- Simpler deployment configuration (fewer moving parts)
+
+## Service Discovery and Networking
+
+### Headless Services for Discovery
+
+**Proxy Headless Service (for Dashboard):**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-proxy-headless
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector:
+    app: {{ include "yao-oracle.name" . }}
+    component: proxy
+  ports:
+  - name: grpc
+    port: {{ .Values.proxy.service.grpcPort }}
+    targetPort: grpc
+  - name: http
+    port: {{ .Values.proxy.service.httpPort }}
+    targetPort: http
+  - name: metrics
+    port: {{ .Values.proxy.service.metricsPort }}
+    targetPort: metrics
+```
+
+**Node Headless Service (for Proxy and Dashboard):**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-node-headless
+  namespace: {{ .Release.Namespace }}
+spec:
+  clusterIP: None
+  selector:
+    app: {{ include "yao-oracle.name" . }}
+    component: node
+  ports:
+  - name: grpc
+    port: {{ .Values.node.service.grpcPort }}
+    targetPort: grpc
+  - name: metrics
+    port: {{ .Values.node.service.metricsPort }}
+    targetPort: metrics
+```
+
+**Proxy ClusterIP Service (for Client Traffic):**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-proxy
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ include "yao-oracle.name" . }}
+    component: proxy
+  ports:
+  - name: grpc
+    port: {{ .Values.proxy.service.grpcPort }}
+    targetPort: grpc
+    protocol: TCP
+```
+
+### Service Discovery Implementation
+
+**Discovery Flow:**
+1. Service reads `NODE_HEADLESS_SERVICE` or `PROXY_SERVICE_DNS` from env vars
+2. Service connects to Kubernetes API using `InClusterConfig()`
+3. Service queries Endpoints for the headless service
+4. Service extracts all Pod IPs from Endpoints.Subsets
+5. Service refreshes periodically (every `DISCOVERY_INTERVAL` seconds)
+
+**RBAC Requirements for Discovery:**
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-discovery
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+```
+
+### Configuration Update Workflow
+
+**Update Infrastructure Config (Requires Redeploy):**
+1. Edit `values.yaml` (change ports, resource limits, discovery intervals, etc.)
+2. Run `helm upgrade`
+3. Kubernetes triggers rolling restart
+4. Pods come up with new environment variables
+
+**Update Business Config (Hot Reload via Informer):**
+1. Edit `values.yaml` (change namespaces, API keys, password, TTL, rate limits)
+2. Run `helm upgrade`
+3. Kubernetes updates Secret
+4. **Informer immediately detects change** (no delay)
+5. Services validate and apply new config atomically
+6. **No Pod restart required**
+
+### Configuration Validation
+
+**Helm Template Validation:**
+```bash
+# Validate ConfigMap rendering
+helm template yao-oracle ./helm/yao-oracle \
+  --show-only templates/configmap.yaml
+
+# Validate Secret rendering
+helm template yao-oracle ./helm/yao-oracle \
+  --show-only templates/secret.yaml
+```
+
+**Runtime Validation:**
+```bash
+# Check Secret data in Kubernetes
+kubectl get secret yao-oracle-secret -n yao-oracle -o jsonpath='{.data.config-with-secrets\.json}' | base64 -d | jq .
+
+# Verify services can access Kubernetes API (test from inside Pod)
+kubectl exec -it yao-oracle-proxy-0 -n yao-oracle -- sh -c '
+  curl -s -k https://kubernetes.default.svc/api/v1/namespaces/$NAMESPACE/secrets/$SECRET_NAME \
+  -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+'
+
+# Check Informer is watching (look for log messages)
+kubectl logs -f yao-oracle-proxy-0 -n yao-oracle | grep "Informer started"
+```
+
+### Best Practices for Configuration Management
+
+**DO:**
+- ✅ Use environment variables for static infrastructure config (ports, limits, intervals)
+- ✅ Use Secret for all sensitive data (API keys, passwords, JWT secrets)
+- ✅ Use ConfigMap for non-sensitive business config (if needed)
+- ✅ Use **Kubernetes Informer** for config hot reload (not file watching)
+- ✅ Use **Kubernetes Endpoints API** for service discovery (not DNS)
+- ✅ Setup proper RBAC (ServiceAccount + Role + RoleBinding)
+- ✅ Implement config validation before applying
+- ✅ Log config changes with timestamps
+- ✅ Use Helm `values-dev.yaml` and `values-prod.yaml` for environments
+- ✅ Use Headless Services for discovery (clusterIP: None)
+- ✅ Use ClusterIP Service for client traffic (with load balancing)
+
+**DON'T:**
+- ❌ Mount ConfigMap/Secret as files (use Kubernetes API instead)
+- ❌ Use `CONFIG_PATH` environment variable (no file mounting)
+- ❌ Store secrets in ConfigMap (use Secret instead)
+- ❌ Mix infrastructure and business config
+- ❌ Use fsnotify for config watching (use Informer instead)
+- ❌ Use DNS for service discovery (use Endpoints API instead)
+- ❌ Skip config validation on load
+- ❌ Forget to setup ServiceAccount and RBAC
+- ❌ Commit production secrets to Git
+- ❌ Use default passwords in production
+- ❌ Restart services for business config changes (use hot reload via Informer)
+- ❌ Hardcode service DNS names in code (use environment variables)
+
+### Environment-Specific Configuration
+
+**Production Overrides (values-prod.yaml):**
+- Increase replica counts
+- Adjust resource limits
+- Enable autoscaling with higher maxReplicas
+- Set log level to "warn" or "error"
+- Use external secret management for sensitive data
+
+**Deployment Pattern:**
+```bash
+# Development
+helm upgrade yao-oracle ./helm/yao-oracle \
+  --namespace yao-oracle-dev \
+  --values values-dev.yaml
+
+# Production (with external secrets)
+export GAME_API_KEY=$(vault kv get -field=apikey secret/yao-oracle/game-app)
+export DASHBOARD_PASSWORD=$(vault kv get -field=password secret/yao-oracle/dashboard)
+
+helm upgrade yao-oracle ./helm/yao-oracle \
+  --namespace yao-oracle-prod \
+  --values values-prod.yaml \
+  --set config.namespaces[0].apikey="$GAME_API_KEY" \
+  --set config.dashboard.password="$DASHBOARD_PASSWORD"
+```
+
+---
+
+## Integration Summary
+
+All infrastructure components work together:
+
+1. **Makefile** → Single entry point for all operations
+2. **Scripts** → Implement tasks with unified logging
+3. **Docker** → Build multi-platform images with buildx
+4. **Helm** → Deploy to Kubernetes with proper configuration
+
+**Example Workflow:**
+```bash
+# 1. Generate proto code
+make proto-generate
+
+# 2. Build and test locally
+make build
+make test
+
+# 3. Build Docker images
+make docker-build
+
+# 4. Push to registry
+make docker-push VERSION=v1.0.0
+
+# 5. Deploy to Kubernetes
+make helm-install
+
+# 6. Upgrade deployment
+make helm-upgrade
+```
+
+**Key Principles:**
+- ✅ Unified logging across all scripts
+- ✅ Makefile as single interface
+- ✅ Multi-platform Docker builds
+- ✅ Minimal, secure container images
+- ✅ Helm for reproducible deployments
+- ✅ Environment-specific values files
+- ✅ Security contexts and non-root users
+- ✅ Autoscaling and resource limits

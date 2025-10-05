@@ -1,0 +1,136 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-proxy
+  labels:
+    {{- include "yao-oracle.proxy.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.proxy.autoscaling.enabled }}
+  replicas: {{ .Values.proxy.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "yao-oracle.proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.global.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "yao-oracle.proxy.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "yao-oracle.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.proxy.podSecurityContext | nindent 8 }}
+      containers:
+      - name: proxy
+        securityContext:
+          {{- toYaml .Values.proxy.securityContext | nindent 12 }}
+        image: {{ include "yao-oracle.proxy.image" . }}
+        imagePullPolicy: {{ .Values.proxy.image.pullPolicy }}
+        ports:
+        - name: grpc
+          containerPort: {{ .Values.proxy.service.grpcPort }}
+          protocol: TCP
+        - name: health
+          containerPort: {{ .Values.proxy.service.healthPort | default 9090 }}
+          protocol: TCP
+        - name: metrics
+          containerPort: {{ .Values.proxy.service.metricsPort | default 9100 }}
+          protocol: TCP
+        {{- with .Values.proxy.livenessProbe }}
+        livenessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.proxy.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.proxy.resources | nindent 12 }}
+        env:
+        # ===== Infrastructure Configuration (Layer 1) =====
+        # Static configuration loaded at startup from environment variables
+        # These require Pod restart to change
+        - name: GRPC_PORT
+          value: {{ .Values.proxy.service.grpcPort | quote }}
+        - name: HEALTH_PORT
+          value: {{ .Values.proxy.service.healthPort | default 9090 | quote }}
+        - name: METRICS_PORT
+          value: {{ .Values.proxy.service.metricsPort | default 9100 | quote }}
+        - name: LOG_LEVEL
+          value: {{ .Values.proxy.logLevel | default "info" | quote }}
+        
+        # ===== Kubernetes API Configuration (Layer 2) =====
+        # Services read configuration directly from Kubernetes API
+        # NO file mounting - services use InClusterConfig() to connect
+        - name: SECRET_NAME
+          value: {{ include "yao-oracle.fullname" . }}-secret
+        {{- if .Values.config.configMapEnabled }}
+        - name: CONFIGMAP_NAME
+          value: {{ include "yao-oracle.fullname" . }}-config
+        {{- end }}
+        
+        # ===== Service Discovery =====
+        # Headless service DNS for discovering Cache Node Pod IPs
+        - name: NODE_HEADLESS_SERVICE
+          value: {{ include "yao-oracle.fullname" . }}-node.{{ .Release.Namespace }}.svc.cluster.local
+        - name: DISCOVERY_MODE
+          value: "k8s"
+        - name: DISCOVERY_INTERVAL
+          value: {{ .Values.proxy.discoveryInterval | default 10 | quote }}
+        
+        # ===== Pod Metadata =====
+        # Auto-injected by Kubernetes for service discovery and logging
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        
+        # ===== Custom Environment Variables =====
+        # Additional user-defined env vars from values.yaml
+        {{- with .Values.proxy.env }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.proxy.securityContext.readOnlyRootFilesystem }}
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        {{- end }}
+      {{- if .Values.proxy.securityContext.readOnlyRootFilesystem }}
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      {{- end }}
+      {{- with .Values.proxy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.proxy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.proxy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+{{- end }}
+

@@ -1,0 +1,90 @@
+# .dockerignore
+# Optimize Docker build context by excluding unnecessary files
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# Build artifacts (except the binaries we need)
+# We want to keep bin/linux/{amd64,arm64}/* for Docker builds
+# but exclude everything else
+
+# Source code (not needed, we copy pre-built binaries)
+cmd/
+core/
+internal/
+api/
+
+# Generated code (not needed, binaries are pre-built)
+pb/
+
+# Go files (not needed, we use pre-built binaries)
+*.go
+go.mod
+go.sum
+go.work
+go.work.sum
+
+# Test files
+*_test.go
+testdata/
+coverage.out
+coverage.html
+*.test
+
+# Kubernetes and Helm (not needed in image)
+helm/
+k8s/
+*.yaml
+*.yml
+!helm/yao-oracle/values.yaml
+
+# Scripts (not needed in image)
+scripts/
+
+# Makefile (not needed in image)
+Makefile
+
+# Local development
+tmp/
+temp/
+.env
+.env.local
+.env.*.local
+
+# Other build artifacts
+*.out
+*.log
+
+# Docker files (not needed in image)
+build/
+!build/*.Dockerfile
+
+# Binaries for other platforms (keep only linux binaries)
+bin/darwin/
+bin/windows/
+bin/freebsd/
+
+# Ignore specific directories but keep needed binaries
+# Docker will still be able to access bin/linux/{amd64,arm64}/*
+

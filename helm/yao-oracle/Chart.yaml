@@ -1,0 +1,21 @@
+apiVersion: v2
+name: yao-oracle
+description: A distributed KV cache system with namespace isolation
+type: application
+version: 0.1.0        # Chart version (SemVer)
+appVersion: "0.1.0"   # Application version
+
+keywords:
+  - cache
+  - distributed-cache
+  - key-value-store
+  - grpc
+
+home: https://github.com/eggybyte/yao-oracle
+sources:
+  - https://github.com/eggybyte/yao-oracle
+
+maintainers:
+  - name: Feng Guang Yao
+    email: fengguangyao@eggybyte.com
+

@@ -1,0 +1,66 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Generated files
+pb/
+bin/
+*.test
+*.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.circleci/
+
+# Kubernetes
+helm/
+k8s/
+*.yaml
+*.yml
+!api/**/*.yaml
+
+# Local development
+tmp/
+temp/
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+build/
+!build/*.Dockerfile
+
+# Test files
+*_test.go
+testdata/
+coverage.out
+coverage.html
+coverage.txt
+
+# Dependencies
+vendor/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+scratch/
+local/

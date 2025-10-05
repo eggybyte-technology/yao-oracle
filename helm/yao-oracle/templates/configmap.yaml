@@ -1,0 +1,48 @@
+{{- /*
+ConfigMap for non-sensitive business configuration.
+This is OPTIONAL - services can run without it if all config is in Secret.
+Contains namespace info without API keys, business settings.
+*/}}
+{{- if .Values.config.configMapEnabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-config
+  labels:
+    {{- include "yao-oracle.labels" . | nindent 4 }}
+  annotations:
+    description: "Yao-Oracle non-sensitive business configuration"
+data:
+  config.json: |
+    {
+      "proxy": {
+        "namespaces": [
+          {{- range $index, $namespace := .Values.config.namespaces }}
+          {{- if $index }},{{ end }}
+          {
+            "name": {{ $namespace.name | quote }},
+            "description": {{ $namespace.description | default "" | quote }}
+            {{- if $namespace.maxMemoryMB }},
+            "maxMemoryMB": {{ $namespace.maxMemoryMB }}
+            {{- end }}
+            {{- if $namespace.maxKeys }},
+            "maxKeys": {{ $namespace.maxKeys }}
+            {{- end }}
+            {{- if $namespace.defaultTTL }},
+            "defaultTTL": {{ $namespace.defaultTTL }}
+            {{- end }}
+            {{- if $namespace.rateLimitQPS }},
+            "rateLimitQPS": {{ $namespace.rateLimitQPS }}
+            {{- end }}
+          }
+          {{- end }}
+        ]
+      },
+      "dashboard": {
+        "refreshInterval": {{ .Values.config.dashboard.refreshInterval | default 5 }},
+        "authEnabled": {{ .Values.config.dashboard.authEnabled | default true }},
+        "sessionTimeout": {{ .Values.config.dashboard.sessionTimeout | default 30 }}
+      }
+    }
+{{- end }}
+

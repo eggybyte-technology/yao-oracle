@@ -1,0 +1,47 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-test-connection
+  labels:
+    {{- include "yao-oracle.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": hook-succeeded,hook-failed
+spec:
+  restartPolicy: Never
+  containers:
+  - name: curl
+    image: curlimages/curl:latest
+    command:
+    - sh
+    - -c
+    - |
+      set -e
+      echo "Testing Yao-Oracle services..."
+      
+      {{- if .Values.proxy.enabled }}
+      echo "==> Testing Proxy service..."
+      curl -f http://{{ include "yao-oracle.fullname" . }}-proxy:{{ .Values.proxy.service.port }}/health || \
+        (echo "Proxy health check failed" && exit 1)
+      echo "✓ Proxy service is healthy"
+      {{- end }}
+      
+      {{- if .Values.node.enabled }}
+      echo "==> Testing Node service..."
+      # Test first node in StatefulSet
+      curl -f http://{{ include "yao-oracle.fullname" . }}-node-0.{{ include "yao-oracle.fullname" . }}-node:{{ .Values.node.service.port }}/health || \
+        (echo "Node health check failed" && exit 1)
+      echo "✓ Node service is healthy"
+      {{- end }}
+      
+      {{- if .Values.dashboard.enabled }}
+      echo "==> Testing Dashboard service..."
+      curl -f http://{{ include "yao-oracle.fullname" . }}-dashboard:{{ .Values.dashboard.service.port }}/health || \
+        (echo "Dashboard health check failed" && exit 1)
+      echo "✓ Dashboard service is healthy"
+      {{- end }}
+      
+      echo ""
+      echo "✅ All services are healthy!"
+      exit 0
+

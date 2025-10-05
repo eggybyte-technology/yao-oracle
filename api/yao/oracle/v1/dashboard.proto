@@ -1,0 +1,237 @@
+syntax = "proto3";
+
+package yao.oracle.v1;
+
+option go_package = "yao-oracle/pb/yao/oracle/v1;oraclev1";
+
+// DashboardService defines the dashboard streaming API for real-time monitoring and configuration management.
+//
+// This service provides:
+//   - Real-time cluster metrics streaming via bidirectional gRPC streams
+//   - Cache query capabilities for debugging and verification
+//   - Secret management for API key rotation
+//   - Configuration retrieval for namespace settings
+service DashboardService {
+  // StreamMetrics establishes a bidirectional stream for real-time cluster metrics.
+  // The client can subscribe to specific namespaces or get global metrics.
+  // The server pushes ClusterMetrics updates at regular intervals.
+  rpc StreamMetrics(SubscribeRequest) returns (stream ClusterMetrics);
+  
+  // QueryCache allows querying a specific cache entry by namespace and key.
+  // This is useful for debugging and verification purposes.
+  rpc QueryCache(CacheQueryRequest) returns (CacheQueryResponse);
+  
+  // ManageSecret updates the API key for a specific namespace.
+  // This triggers an immediate reload in the proxy service.
+  rpc ManageSecret(SecretUpdateRequest) returns (SecretUpdateResponse);
+  
+  // GetConfig retrieves the current configuration for all namespaces.
+  // This includes default TTL, max keys, and rate limits.
+  rpc GetConfig(ConfigRequest) returns (ConfigResponse);
+}
+
+// SubscribeRequest specifies what metrics to subscribe to.
+message SubscribeRequest {
+  // namespace to filter metrics. Empty string subscribes to global metrics.
+  string namespace = 1;
+}
+
+// ClusterMetrics contains a snapshot of the entire cluster state at a point in time.
+// This is streamed to dashboard clients for real-time monitoring.
+message ClusterMetrics {
+  // timestamp is the Unix timestamp when these metrics were collected
+  int64 timestamp = 1;
+  
+  // global contains cluster-wide aggregated metrics
+  GlobalStats global = 2;
+  
+  // namespaces contains per-namespace statistics
+  repeated NamespaceStats namespaces = 3;
+  
+  // nodes contains per-node statistics
+  repeated NodeStats nodes = 4;
+}
+
+// GlobalStats contains cluster-wide aggregated metrics.
+message GlobalStats {
+  // qps is the queries per second across all proxies and nodes
+  double qps = 1;
+  
+  // latency_ms is the average latency in milliseconds (P50)
+  double latency_ms = 2;
+  
+  // hit_rate is the overall cache hit rate (0.0 to 1.0)
+  double hit_rate = 3;
+  
+  // memory_used_mb is the total memory used across all nodes in MB
+  double memory_used_mb = 4;
+  
+  // health_score is a computed health score (0.0 to 1.0) based on hit rate, latency, and memory
+  double health_score = 5;
+  
+  // total_keys is the total number of keys across all nodes
+  int64 total_keys = 6;
+  
+  // total_proxies is the number of proxy instances
+  int32 total_proxies = 7;
+  
+  // total_nodes is the number of cache node instances
+  int32 total_nodes = 8;
+  
+  // healthy_nodes is the number of healthy cache nodes
+  int32 healthy_nodes = 9;
+}
+
+// NamespaceStats contains statistics for a single business namespace.
+message NamespaceStats {
+  // name is the namespace identifier
+  string name = 1;
+  
+  // qps is the queries per second for this namespace
+  double qps = 2;
+  
+  // hit_rate is the cache hit rate for this namespace (0.0 to 1.0)
+  double hit_rate = 3;
+  
+  // ttl_avg is the average TTL of keys in this namespace (seconds)
+  double ttl_avg = 4;
+  
+  // keys is the total number of keys in this namespace
+  int64 keys = 5;
+  
+  // memory_used_mb is the memory used by this namespace in MB
+  double memory_used_mb = 6;
+  
+  // api_key is the current API key (masked for security)
+  string api_key = 7;
+  
+  // description is a human-readable description of this namespace
+  string description = 8;
+  
+  // max_memory_mb is the maximum memory limit for this namespace
+  int32 max_memory_mb = 9;
+  
+  // default_ttl is the default TTL for keys in this namespace
+  int32 default_ttl = 10;
+  
+  // rate_limit_qps is the rate limit in queries per second
+  int32 rate_limit_qps = 11;
+}
+
+// NodeStats contains statistics for a single cache node.
+message NodeStats {
+  // id is the node identifier
+  string id = 1;
+  
+  // ip is the node's IP address
+  string ip = 2;
+  
+  // namespace is the namespace this node primarily serves (optional)
+  string namespace = 3;
+  
+  // memory_used_mb is the memory used by this node in MB
+  double memory_used_mb = 4;
+  
+  // hit_rate is the cache hit rate for this node (0.0 to 1.0)
+  double hit_rate = 5;
+  
+  // latency_ms is the average latency for this node in milliseconds
+  double latency_ms = 6;
+  
+  // key_count is the number of keys stored on this node
+  int64 key_count = 7;
+  
+  // healthy indicates if the node is operational
+  bool healthy = 8;
+  
+  // uptime_seconds is how long the node has been running
+  int64 uptime_seconds = 9;
+  
+  // qps is the queries per second for this node
+  double qps = 10;
+}
+
+// CacheQueryRequest specifies which cache entry to query.
+message CacheQueryRequest {
+  // namespace is the business namespace
+  string namespace = 1;
+  
+  // key is the cache key to query
+  string key = 2;
+}
+
+// CacheQueryResponse contains the details of a cache entry.
+message CacheQueryResponse {
+  // key is the cache key
+  string key = 1;
+  
+  // value is the cached value (as string for display)
+  string value = 2;
+  
+  // ttl_seconds is the remaining time-to-live in seconds
+  int64 ttl_seconds = 3;
+  
+  // size_bytes is the size of the value in bytes
+  int64 size_bytes = 4;
+  
+  // created_at is the ISO 8601 timestamp when the key was created
+  string created_at = 5;
+  
+  // last_access is the ISO 8601 timestamp when the key was last accessed
+  string last_access = 6;
+  
+  // found indicates if the key was found in the cache
+  bool found = 7;
+}
+
+// SecretUpdateRequest specifies the API key update for a namespace.
+message SecretUpdateRequest {
+  // namespace is the business namespace to update
+  string namespace = 1;
+  
+  // new_api_key is the new API key to set
+  string new_api_key = 2;
+}
+
+// SecretUpdateResponse confirms the API key update.
+message SecretUpdateResponse {
+  // success indicates if the update was successful
+  bool success = 1;
+  
+  // updated_at is the ISO 8601 timestamp when the update occurred
+  string updated_at = 2;
+  
+  // message contains additional information or error details
+  string message = 3;
+}
+
+// ConfigRequest is empty (retrieve all namespace configurations).
+message ConfigRequest {}
+
+// ConfigResponse contains configuration for all namespaces.
+message ConfigResponse {
+  // configs is the list of namespace configurations
+  repeated NamespaceConfig configs = 1;
+}
+
+// NamespaceConfig contains configuration settings for a namespace.
+message NamespaceConfig {
+  // namespace is the namespace identifier
+  string namespace = 1;
+  
+  // default_ttl is the default time-to-live in seconds
+  int64 default_ttl = 2;
+  
+  // max_keys is the maximum number of keys allowed
+  int64 max_keys = 3;
+  
+  // max_memory_mb is the maximum memory limit in MB
+  int32 max_memory_mb = 4;
+  
+  // rate_limit_qps is the rate limit in queries per second
+  int32 rate_limit_qps = 5;
+  
+  // description is a human-readable description
+  string description = 6;
+}
+

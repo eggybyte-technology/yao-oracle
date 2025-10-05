@@ -1,0 +1,725 @@
+---
+description: Admin service architecture, metrics collection, and observability control plane
+---
+
+# Admin Service Architecture & Implementation
+
+## Overview
+
+The Admin service is the **observability control plane** for Yao-Oracle. It acts as the central hub for metrics collection, aggregation, and distribution.
+
+**Key Characteristics:**
+- Collects metrics from Proxy and Node via gRPC streams
+- Aggregates data in-memory with ring buffer (no external DB)
+- Provides REST API for Dashboard queries
+- Pushes real-time updates via WebSocket
+- Monitors cluster health and triggers events
+- Completely decoupled from business logic (KV operations)
+
+**Architecture Position:**
+```
+Proxy/Node → gRPC Metrics → Admin → REST/WebSocket → Dashboard (React)
+```
+
+## Architecture
+
+### Component Structure
+
+```
+cmd/admin/
+└── main.go                    # Entry point: HTTP + gRPC server setup
+
+internal/admin/
+├── server.go                  # Server orchestration (HTTP + gRPC)
+├── collector.go               # gRPC metrics collector from Proxy/Node
+├── aggregator.go              # In-memory metrics aggregation
+├── rest_handlers.go           # REST API for Dashboard
+├── websocket.go               # WebSocket real-time push
+├── health.go                  # Cluster health monitoring
+└── ring_buffer.go             # Time-series data storage
+
+core/metrics/
+├── types.go                   # Metric data structures
+├── aggregator.go              # Aggregation interfaces
+└── collector.go               # Collection interfaces
+
+api/yao/oracle/v1/
+├── metrics.proto              # Metrics reporting API (Proxy/Node → Admin)
+└── admin.proto                # Admin service API (REST + WebSocket)
+```
+
+## Metrics Collection Strategy
+
+### gRPC Stream-Based Collection
+
+**Why gRPC Streams:**
+- ✅ Long-lived connection reduces overhead
+- ✅ Bidirectional communication (push from Proxy/Node)
+- ✅ Automatic reconnection with retry
+- ✅ Efficient binary serialization
+
+**Collection Flow:**
+1. Admin starts gRPC server on port 8080 (configurable)
+2. Proxy/Node connect to Admin headless service
+3. Each Proxy/Node opens a long-lived gRPC stream
+4. Metrics pushed periodically (default: every 5 seconds)
+5. Admin aggregates and stores in ring buffer
+6. Dashboard queries aggregated data via REST/WebSocket
+
+### Metrics Data Model
+
+**Proxy Metrics (per instance):**
+```go
+type ProxyMetrics struct {
+    InstanceID    string
+    Timestamp     time.Time
+    Uptime        int64
+    QPS           *QPSBreakdown     // GET/SET/DELETE QPS
+    Latency       *LatencyStats     // P50/P90/P99
+    ErrorRate     float64
+    Connections   int32
+    Namespaces    []string
+    Status        string            // "healthy" | "degraded" | "down"
+}
+
+type QPSBreakdown struct {
+    Get    int32
+    Set    int32
+    Delete int32
+}
+
+type LatencyStats struct {
+    P50 float64
+    P90 float64
+    P99 float64
+}
+```
+
+**Node Metrics (per instance):**
+```go
+type NodeMetrics struct {
+    InstanceID    string
+    Timestamp     time.Time
+    Uptime        int64
+    Memory        *MemoryStats
+    KeyCount      int64
+    HitCount      int64
+    MissCount     int64
+    HotKeys       []*HotKey
+    Status        string            // "healthy" | "full" | "down"
+}
+
+type MemoryStats struct {
+    Used int64
+    Max  int64
+}
+
+type HotKey struct {
+    Key       string
+    Frequency int64
+}
+```
+
+### In-Memory Aggregation
+
+**Ring Buffer Design:**
+- Fixed-size circular buffer for time-series data
+- Default retention: last 1000 data points per instance
+- Configurable retention period (default: 1 hour)
+- Automatic eviction of old data
+
+**Storage Structure:**
+```go
+type MetricsAggregator struct {
+    proxyMetrics  map[string]*RingBuffer  // InstanceID → metrics
+    nodeMetrics   map[string]*RingBuffer  // InstanceID → metrics
+    globalMetrics *GlobalMetrics
+    mu            sync.RWMutex
+}
+
+type RingBuffer struct {
+    data     []interface{}
+    head     int
+    size     int
+    capacity int
+}
+
+type GlobalMetrics struct {
+    TotalProxies      int
+    HealthyProxies    int
+    TotalNodes        int
+    HealthyNodes      int
+    TotalQPS          int64
+    TotalKeys         int64
+    OverallHitRatio   float64
+    LastUpdated       time.Time
+}
+```
+
+## REST API Design
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/overview` | Cluster overview (Node/Proxy count, global metrics) |
+| `GET` | `/api/proxies` | All Proxy instances status list |
+| `GET` | `/api/proxies/:id` | Single Proxy instance details |
+| `GET` | `/api/proxies/:id/timeseries` | Proxy historical metrics |
+| `GET` | `/api/nodes` | All Node instances status list |
+| `GET` | `/api/nodes/:id` | Single Node instance details |
+| `GET` | `/api/nodes/:id/timeseries` | Node historical metrics |
+| `GET` | `/api/namespaces` | All namespaces statistics |
+| `GET` | `/api/namespaces/:name` | Single namespace details |
+| `GET` | `/api/health` | Cluster health check |
+
+### Response Format
+
+**Overview Response:**
+```json
+{
+  "proxies": {
+    "total": 2,
+    "healthy": 2,
+    "unhealthy": 0
+  },
+  "nodes": {
+    "total": 3,
+    "healthy": 3,
+    "unhealthy": 0
+  },
+  "metrics": {
+    "total_qps": 1800,
+    "total_keys": 45000,
+    "hit_ratio": 0.89,
+    "avg_latency_ms": 1.5
+  },
+  "last_updated": "2025-10-04T10:30:00Z"
+}
+```
+
+**Proxy List Response:**
+```json
+{
+  "proxies": [
+    {
+      "id": "proxy-0",
+      "ip": "10.0.1.10",
+      "uptime": 172800,
+      "qps": {"get": 800, "set": 200, "delete": 10},
+      "latency": {"p50": 1.2, "p90": 2.1, "p99": 4.0},
+      "error_rate": 0.0003,
+      "connections": 45,
+      "status": "healthy"
+    }
+  ]
+}
+```
+
+**Node List Response:**
+```json
+{
+  "nodes": [
+    {
+      "id": "node-0",
+      "ip": "10.0.2.10",
+      "uptime": 172800,
+      "memory": {"used": 850, "max": 1024},
+      "key_count": 25000,
+      "hit_count": 345932120,
+      "miss_count": 1934242,
+      "status": "healthy"
+    }
+  ]
+}
+```
+
+**Timeseries Response:**
+```json
+{
+  "instance_id": "proxy-0",
+  "metrics": [
+    {
+      "timestamp": "2025-10-04T10:00:00Z",
+      "qps": {"get": 800, "set": 200, "delete": 10},
+      "latency": {"p50": 1.2, "p90": 2.1, "p99": 4.0}
+    },
+    {
+      "timestamp": "2025-10-04T10:05:00Z",
+      "qps": {"get": 850, "set": 210, "delete": 12},
+      "latency": {"p50": 1.3, "p90": 2.2, "p99": 4.1}
+    }
+  ]
+}
+```
+
+## WebSocket Real-Time Updates
+
+### WebSocket Protocol
+
+**Connection Endpoint:**
+```
+ws://admin-service.yao-oracle.svc.cluster.local:8080/ws
+```
+
+**Message Types:**
+```go
+type WebSocketMessage struct {
+    Type string          `json:"type"`
+    Data json.RawMessage `json:"data"`
+}
+
+// Message types:
+// - "overview_update": Global metrics update
+// - "proxy_update": Single proxy metrics update
+// - "node_update": Single node metrics update
+// - "event": Cluster event (node down, config change, etc.)
+```
+
+**Example Messages:**
+
+**Overview Update:**
+```json
+{
+  "type": "overview_update",
+  "data": {
+    "total_qps": 1900,
+    "hit_ratio": 0.90,
+    "healthy_proxies": 2,
+    "healthy_nodes": 3
+  }
+}
+```
+
+**Proxy Update:**
+```json
+{
+  "type": "proxy_update",
+  "data": {
+    "id": "proxy-1",
+    "qps": {"get": 900, "set": 250, "delete": 15},
+    "latency": {"p50": 1.1, "p90": 2.0, "p99": 3.8}
+  }
+}
+```
+
+**Node Update:**
+```json
+{
+  "type": "node_update",
+  "data": {
+    "id": "node-2",
+    "memory": {"used": 920, "max": 1024},
+    "key_count": 28000,
+    "status": "healthy"
+  }
+}
+```
+
+**Event Notification:**
+```json
+{
+  "type": "event",
+  "data": {
+    "severity": "warning",
+    "message": "node-1 memory usage above 90%",
+    "timestamp": "2025-10-04T10:35:00Z"
+  }
+}
+```
+
+### WebSocket Implementation Requirements
+
+**Server-Side:**
+- Use Gorilla WebSocket library
+- Support multiple concurrent clients
+- Broadcast updates to all connected clients
+- Handle client disconnection gracefully
+- Rate limit updates (max 1 update per second per type)
+
+**Client-Side (Dashboard):**
+- Auto-reconnect on connection loss
+- Handle different message types
+- Update UI in real-time without flickering
+- Buffer updates if processing is slow
+
+## Health Monitoring
+
+### Health Check Logic
+
+**Proxy Health:**
+- Status: "healthy" if last metric received < 30 seconds ago
+- Status: "degraded" if error_rate > 1%
+- Status: "down" if no metric for > 60 seconds
+
+**Node Health:**
+- Status: "healthy" if last metric received < 30 seconds ago
+- Status: "full" if memory usage > 95%
+- Status: "down" if no metric for > 60 seconds
+
+**Cluster Health Score:**
+```go
+func calculateClusterHealth() string {
+    if unhealthyProxies > 0 || unhealthyNodes > 0 {
+        return "degraded"
+    }
+    if hitRatio < 0.5 || avgLatency > 10 {
+        return "warning"
+    }
+    return "healthy"
+}
+```
+
+### Event Triggers
+
+**Events to Monitor:**
+- Node down/up
+- Proxy down/up
+- Memory usage > 90%
+- Hit ratio < 50%
+- Latency P99 > 100ms
+- Configuration change detected
+
+## Service Discovery
+
+### Discovering Proxy and Node Instances
+
+**Admin uses Kubernetes Endpoints API** to discover Proxy/Node instances.
+
+**Discovery Flow:**
+1. Admin reads `PROXY_HEADLESS_SERVICE` and `NODE_HEADLESS_SERVICE` from env
+2. Connects to Kubernetes API using `InClusterConfig()`
+3. Queries Endpoints for both headless services
+4. Extracts all Pod IPs from Endpoints.Subsets
+5. Maintains list of known instances
+6. Marks instances as "down" if no metrics received within timeout
+
+**RBAC Requirements:**
+- Admin Pod needs ServiceAccount with Role granting:
+  - `get`, `list`, `watch` on `endpoints` resource
+  - `get`, `list`, `watch` on `secrets` resource (for config)
+
+## Configuration Loading
+
+### Environment Variables Required
+
+```yaml
+# Infrastructure Config
+- GRPC_PORT: "8080"           # gRPC server for metrics collection
+- HTTP_PORT: "8081"           # HTTP server for REST API
+- METRICS_PORT: "9100"        # Prometheus metrics
+- LOG_LEVEL: "info"
+
+# Kubernetes Config
+- NAMESPACE: "yao-oracle"
+- SECRET_NAME: "yao-oracle-secret"
+- PROXY_HEADLESS_SERVICE: "yao-oracle-proxy-headless"
+- NODE_HEADLESS_SERVICE: "yao-oracle-node-headless"
+
+# Metrics Config
+- METRICS_RETENTION_HOURS: "1"
+- METRICS_BUFFER_SIZE: "1000"
+- WEBSOCKET_UPDATE_INTERVAL: "1"  # seconds
+```
+
+### Configuration from Secret
+
+**Admin reads from Kubernetes Secret for:**
+- Namespace list (to provide to Dashboard)
+- Dashboard password (optional, for future auth)
+
+**Loading Pattern:**
+```go
+// 1. Load env vars
+// 2. Connect to Kubernetes API
+// 3. Load Secret data
+// 4. Start Kubernetes Informer for hot reload
+// 5. Start gRPC server (metrics collection)
+// 6. Start HTTP server (REST + WebSocket)
+// 7. Start service discovery
+```
+
+## Implementation Requirements
+
+### Server Initialization
+
+```go
+type Server struct {
+    grpcServer   *grpc.Server
+    httpServer   *http.Server
+    collector    *MetricsCollector
+    aggregator   *MetricsAggregator
+    wsHub        *WebSocketHub
+    discovery    *ServiceDiscovery
+    config       *config.AdminConfig
+    configMutex  sync.RWMutex
+}
+
+func NewServer(cfg *ServerConfig) (*Server, error) {
+    // Initialize components
+    // Setup gRPC server for metrics collection
+    // Setup HTTP server for REST API
+    // Setup WebSocket hub
+    // Setup service discovery
+    return &Server{...}, nil
+}
+
+func (s *Server) Start(ctx context.Context) error {
+    // Start gRPC server in goroutine
+    // Start HTTP server in goroutine
+    // Start WebSocket broadcaster in goroutine
+    // Start service discovery in goroutine
+    // Wait for context cancellation
+    return nil
+}
+```
+
+### Metrics Collector Implementation
+
+```go
+type MetricsCollector struct {
+    aggregator *MetricsAggregator
+}
+
+// gRPC streaming RPC implementation
+func (c *MetricsCollector) ReportProxyMetrics(stream pb.MetricsService_ReportProxyMetricsServer) error {
+    for {
+        metrics, err := stream.Recv()
+        if err == io.EOF {
+            return nil
+        }
+        if err != nil {
+            return err
+        }
+        
+        // Store in aggregator
+        c.aggregator.AddProxyMetrics(metrics)
+        
+        // Broadcast to WebSocket clients
+        c.wsHub.Broadcast(&WebSocketMessage{
+            Type: "proxy_update",
+            Data: metrics,
+        })
+    }
+}
+
+func (c *MetricsCollector) ReportNodeMetrics(stream pb.MetricsService_ReportNodeMetricsServer) error {
+    // Similar to ReportProxyMetrics
+}
+```
+
+### REST Handler Implementation
+
+```go
+func (s *Server) setupRoutes() {
+    router := gin.Default()
+    
+    // Health check
+    router.GET("/health", s.handleHealth)
+    
+    // API routes
+    api := router.Group("/api")
+    {
+        api.GET("/overview", s.handleOverview)
+        api.GET("/proxies", s.handleProxiesList)
+        api.GET("/proxies/:id", s.handleProxyDetails)
+        api.GET("/proxies/:id/timeseries", s.handleProxyTimeseries)
+        api.GET("/nodes", s.handleNodesList)
+        api.GET("/nodes/:id", s.handleNodeDetails)
+        api.GET("/nodes/:id/timeseries", s.handleNodeTimeseries)
+        api.GET("/namespaces", s.handleNamespacesList)
+    }
+    
+    // WebSocket
+    router.GET("/ws", s.handleWebSocket)
+    
+    s.httpServer = &http.Server{
+        Addr:    fmt.Sprintf(":%d", s.config.HTTPPort),
+        Handler: router,
+    }
+}
+```
+
+## Protocol Buffers Definitions
+
+### metrics.proto (Proxy/Node → Admin)
+
+```protobuf
+syntax = "proto3";
+
+package yao.oracle.v1;
+
+// Proxy metrics reporting
+service MetricsService {
+  rpc ReportProxyMetrics(stream ProxyMetricsReport) returns (Empty);
+  rpc ReportNodeMetrics(stream NodeMetricsReport) returns (Empty);
+}
+
+message ProxyMetricsReport {
+  string instance_id = 1;
+  int64 timestamp = 2;
+  int64 uptime = 3;
+  QPSBreakdown qps = 4;
+  LatencyStats latency = 5;
+  double error_rate = 6;
+  int32 connections = 7;
+  repeated string namespaces = 8;
+  string status = 9;
+}
+
+message NodeMetricsReport {
+  string instance_id = 1;
+  int64 timestamp = 2;
+  int64 uptime = 3;
+  MemoryStats memory = 4;
+  int64 key_count = 5;
+  int64 hit_count = 6;
+  int64 miss_count = 7;
+  repeated HotKey hot_keys = 8;
+  string status = 9;
+}
+
+message QPSBreakdown {
+  int32 get = 1;
+  int32 set = 2;
+  int32 delete = 3;
+}
+
+message LatencyStats {
+  double p50 = 1;
+  double p90 = 2;
+  double p99 = 3;
+}
+
+message MemoryStats {
+  int64 used = 1;
+  int64 max = 2;
+}
+
+message HotKey {
+  string key = 1;
+  int64 frequency = 2;
+}
+
+message Empty {}
+```
+
+## Deployment Configuration
+
+### Environment Variables in Helm
+
+```yaml
+env:
+- name: GRPC_PORT
+  value: "8080"
+- name: HTTP_PORT
+  value: "8081"
+- name: METRICS_PORT
+  value: "9100"
+- name: LOG_LEVEL
+  value: {{ .Values.logLevel | quote }}
+- name: NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: SECRET_NAME
+  value: {{ include "yao-oracle.fullname" . }}-secret
+- name: PROXY_HEADLESS_SERVICE
+  value: {{ include "yao-oracle.fullname" . }}-proxy-headless
+- name: NODE_HEADLESS_SERVICE
+  value: {{ include "yao-oracle.fullname" . }}-node-headless
+- name: METRICS_RETENTION_HOURS
+  value: {{ .Values.admin.metricsRetentionHours | default 1 | quote }}
+```
+
+### Service Configuration
+
+**ClusterIP Service (for Dashboard):**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-admin
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ include "yao-oracle.name" . }}
+    component: admin
+  ports:
+  - name: http
+    port: 8081
+    targetPort: http
+  - name: grpc
+    port: 8080
+    targetPort: grpc
+```
+
+**Headless Service (for metrics collection):**
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-admin-headless
+spec:
+  clusterIP: None
+  selector:
+    app: {{ include "yao-oracle.name" . }}
+    component: admin
+  ports:
+  - name: grpc
+    port: 8080
+    targetPort: grpc
+```
+
+## Best Practices
+
+### DO:
+- ✅ Use gRPC streams for efficient metrics collection
+- ✅ Store metrics in-memory with ring buffer (no external DB)
+- ✅ Provide both REST API and WebSocket for Dashboard
+- ✅ Monitor Proxy/Node health and trigger events
+- ✅ Use Kubernetes Endpoints API for service discovery
+- ✅ Implement rate limiting for WebSocket updates
+- ✅ Handle metrics collection failures gracefully (reconnect)
+- ✅ Log all cluster events for audit trail
+- ✅ Implement proper RBAC for Kubernetes API access
+- ✅ Use structured logging for better observability
+
+### DON'T:
+- ❌ Store metrics in external database (keep it lightweight)
+- ❌ Block gRPC streams on slow processing
+- ❌ Send WebSocket updates too frequently (rate limit)
+- ❌ Crash if a Proxy/Node disconnects (mark as down)
+- ❌ Expose internal metrics structure to Dashboard (use API layer)
+- ❌ Forget to handle WebSocket client disconnections
+- ❌ Mix business logic with observability (Admin is pure observability)
+- ❌ Use DNS for service discovery (use Endpoints API)
+- ❌ Skip validation of incoming metrics
+- ❌ Forget to cleanup old data from ring buffer
+
+## Testing Requirements
+
+**Required Tests:**
+1. **Metrics Collection**: Verify gRPC stream handling
+2. **Aggregation**: Test ring buffer and data retention
+3. **REST API**: Test all endpoints with mock data
+4. **WebSocket**: Test broadcast and client disconnection
+5. **Health Monitoring**: Test instance health detection
+6. **Service Discovery**: Test Endpoints API integration
+7. **Concurrent Access**: Test with `go test -race`
+
+## Summary
+
+**Admin Service Responsibilities:**
+- 🧠 Central metrics collection hub
+- 📊 In-memory aggregation (no external DB)
+- 🌐 REST API for Dashboard queries
+- 🔄 WebSocket for real-time updates
+- 🏥 Cluster health monitoring
+- 🔍 Service discovery via Kubernetes API
+
+**Key Design Principles:**
+- Lightweight and stateless (metrics stored in-memory)
+- Decoupled from business logic (pure observability)
+- Real-time updates via WebSocket
+- Cloud-native integration (Kubernetes API)

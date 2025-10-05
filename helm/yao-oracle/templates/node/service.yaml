@@ -1,0 +1,32 @@
+{{- if .Values.node.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "yao-oracle.fullname" . }}-node
+  labels:
+    {{- include "yao-oracle.node.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.node.service.type }}
+  {{- if .Values.node.service.clusterIP }}
+  clusterIP: {{ .Values.node.service.clusterIP }}
+  {{- end }}
+  publishNotReadyAddresses: true
+  ports:
+  - port: {{ .Values.node.service.port }}
+    targetPort: grpc
+    protocol: TCP
+    name: grpc
+  - port: {{ .Values.node.service.healthPort | default 9090 }}
+    targetPort: health
+    protocol: TCP
+    name: health
+  {{- if .Values.node.metrics.enabled }}
+  - port: {{ .Values.node.service.metricsPort | default 9100 }}
+    targetPort: metrics
+    protocol: TCP
+    name: metrics
+  {{- end }}
+  selector:
+    {{- include "yao-oracle.node.selectorLabels" . | nindent 4 }}
+{{- end }}
+
