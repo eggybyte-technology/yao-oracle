@@ -14,7 +14,6 @@ import (
 
 	oraclev1 "github.com/eggybyte-technology/yao-oracle/pb/yao/oracle/v1"
 
-	"github.com/eggybyte-technology/yao-oracle/core/config"
 	"github.com/eggybyte-technology/yao-oracle/core/health"
 	"github.com/eggybyte-technology/yao-oracle/core/utils"
 )
@@ -48,14 +47,6 @@ type Server struct {
 	stopCh          chan struct{}
 	mockGenerator   *MockDataGenerator // For test mode
 	testMode        bool               // Whether running in test mode
-}
-
-// ConfigInformer is an interface for configuration providers.
-// This allows both real Kubernetes Informer and mock implementations.
-type ConfigInformer interface {
-	GetConfig() config.Config
-	Start(ctx context.Context, onChange func(kind string, data map[string][]byte)) error
-	Stop()
 }
 
 // NewServer creates a new dashboard server instance with configuration informer.

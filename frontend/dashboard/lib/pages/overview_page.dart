@@ -8,6 +8,7 @@ import '../core/app_state.dart';
 import '../models/metrics.dart';
 import '../widgets/metric_card.dart';
 import '../widgets/loading_widget.dart' as loading;
+import '../widgets/query_cache_dialog.dart';
 
 /// Cluster overview page displaying key metrics
 class OverviewPage extends StatelessWidget {
@@ -33,36 +34,50 @@ class OverviewPage extends StatelessWidget {
           return const loading.EmptyStateWidget(message: 'No data available');
         }
 
-        return RefreshIndicator(
-          onRefresh: () => appState.loadAll(),
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Header
-                _buildHeader(context, overview, appState.isStreamConnected),
-                const SizedBox(height: 24),
+        return Scaffold(
+          body: RefreshIndicator(
+            onRefresh: () => appState.loadAll(),
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  _buildHeader(context, overview, appState.isStreamConnected),
+                  const SizedBox(height: 24),
 
-                // Component Health
-                Text(
-                  'Component Health',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 12),
-                _buildComponentHealth(overview),
-                const SizedBox(height: 24),
+                  // Component Health
+                  Text(
+                    'Component Health',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  _buildComponentHealth(overview),
+                  const SizedBox(height: 24),
 
-                // Cluster Metrics
-                Text(
-                  'Cluster Metrics',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
-                const SizedBox(height: 12),
-                _buildClusterMetrics(overview),
-              ],
+                  // Cluster Metrics
+                  Text(
+                    'Cluster Metrics',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 12),
+                  _buildClusterMetrics(overview),
+                ],
+              ),
             ),
+          ),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => QueryCacheDialog(
+                  grpcClient: context.read<AppState>().grpcClient,
+                ),
+              );
+            },
+            icon: const Icon(Icons.search),
+            label: const Text('Query Cache'),
           ),
         );
       },

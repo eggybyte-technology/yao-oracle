@@ -64,6 +64,7 @@ build-local: proto-generate ## Build all services for local architecture only (q
 	@go build -o bin/proxy ./cmd/proxy
 	@go build -o bin/node ./cmd/node
 	@go build -o bin/dashboard ./cmd/dashboard
+	@go build -o bin/mock-admin ./cmd/mock-admin
 	@echo "✅ All services built"
 
 .PHONY: build-proxy
@@ -77,6 +78,13 @@ build-node: ## Build node service for multiple architectures
 .PHONY: build-dashboard
 build-dashboard: ## Build dashboard service for multiple architectures
 	@bash scripts/build.sh --service dashboard
+
+.PHONY: build-mock-admin
+build-mock-admin: proto-generate ## Build mock-admin service for local testing
+	@echo "Building mock-admin for local development..."
+	@mkdir -p bin
+	@go build -o bin/mock-admin ./cmd/mock-admin
+	@echo "✅ mock-admin built"
 
 .PHONY: build-amd64
 build-amd64: ## Build all services for linux/amd64 only
@@ -98,6 +106,14 @@ run-proxy: build-proxy ## Run proxy locally
 .PHONY: run-dashboard
 run-dashboard: build-dashboard ## Run dashboard in test mode with mock data
 	@TEST_MODE=true DASHBOARD_PASSWORD=admin123 HTTP_PORT=8081 ./bin/dashboard
+
+.PHONY: run-mock-admin
+run-mock-admin: build-mock-admin ## Run mock-admin service for testing (default port 9090)
+	@./bin/mock-admin --grpc-port=9090 --password=admin123 --refresh-interval=5
+
+.PHONY: run-dashboard-dev
+run-dashboard-dev: ## Start mock-admin and Flutter dashboard for development
+	@bash scripts/run-dashboard-dev.sh
 
 # Docker
 .PHONY: docker-build
@@ -156,6 +172,7 @@ clean: ## Clean build artifacts
 	@rm -rf bin/
 	@rm -rf pb/
 	@rm -f coverage.out coverage.html
+	@rm -rf frontend/dashboard/build/
 	@echo "✅ Clean complete"
 
 .PHONY: clean-dart
